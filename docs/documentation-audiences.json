@@ -241,6 +241,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/credentials.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/decision-hold-lifecycle.md",
       "audience": "maintainer-architecture"
     },
@@ -250,6 +254,10 @@
     },
     {
       "path": "docs/examples/crew-dispatch.json",
+      "audience": "operator-example"
+    },
+    {
+      "path": "docs/examples/credentials.json",
       "audience": "operator-example"
     },
     {

@@ -288,6 +288,9 @@ Malformed JSON, an empty or malformed rule/default array, an unverified harness,
 While the file remains present, no crewmate or scout spawn may proceed without an explicit resolved harness; malformed configuration must be reported and corrected rather than selected around.
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
 
+`config/credentials.json` is a private, non-secret alias policy that is deliberately excluded from generic secondmate inheritance.
+[`credentials.md`](credentials.md) is the single owner of its schema, validation, trust model, and provider-adapter contract.
+
 ## Toolchain
 
 On session start the first mate detects what its required toolchain is missing or too old and lists each problem with either an exact install command or manual instructions.
