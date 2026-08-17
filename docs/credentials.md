@@ -119,7 +119,8 @@ Check one alias with:
 bin/fm-credential.sh status dash.cloudflare.deploy
 ```
 
-`status` reports `available`, `available-expiring`, `expired`, `missing`, `missing-backend`, `missing-provider`, `credential-invalid`, `credential-revoked-or-expired`, `insufficient-scope`, `network-failure`, or `provider-failure`.
+`status` reports `available`, `available-expiring`, `expired`, `missing`, `missing-project`, `missing-backend`, `missing-provider`, `credential-invalid`, `credential-revoked-or-expired`, `insufficient-scope`, `network-failure`, or `provider-failure`.
+Readiness requires the alias project to resolve under `FM_HOME/projects`, and provider discovery checks that registered project before falling back to `PATH`.
 A static token with an `expires_at` value in the next 30 days remains usable but reports `available-expiring` with its non-secret timestamp.
 
 Run an approved operation with:

@@ -167,7 +167,7 @@ assert_sentinel_absent_after_backend_cleanup() {
 }
 
 test_doctor_status_and_command_scoped_delivery() {
-  local dir identity_dir
+  local dir identity_dir missing_project_dir project_provider_dir
   dir=$(make_case ready)
   set_secret "$dir"
   run_case "$dir" doctor
@@ -203,6 +203,32 @@ test_doctor_status_and_command_scoped_delivery() {
     "missing broker identity was not classified as unavailable"
   [ ! -s "$identity_dir/broker.log" ] || fail "ambient identity reached the 1Password adapter"
   rm -f "$identity_dir/backend/secret"
+  missing_project_dir=$(make_case missing-project)
+  set_secret "$missing_project_dir"
+  rmdir "$missing_project_dir/home/projects/dash.lifelinevending.com"
+  run_case "$missing_project_dir" status dash.cloudflare.deploy
+  expect_code 5 "$RUN_RC" "status should reject an unregistered alias project"
+  assert_contains "$RUN_OUT" ': missing-project' "status reported a missing project as available"
+  [ ! -s "$missing_project_dir/broker.log" ] || fail "status probed a credential before project binding"
+  run_case "$missing_project_dir" doctor
+  expect_code 1 "$RUN_RC" "doctor should not be ready with an unregistered alias project"
+  assert_contains "$RUN_OUT" ': missing-project' "doctor omitted the missing project classification"
+  rm -f "$missing_project_dir/backend/secret"
+  project_provider_dir=$(make_case project-provider)
+  set_secret "$project_provider_dir"
+  mkdir -p "$project_provider_dir/home/projects/dash.lifelinevending.com/node_modules/.bin"
+  cp "$project_provider_dir/fakebin/wrangler" "$project_provider_dir/backend/wrangler-provider"
+  cat > "$project_provider_dir/home/projects/dash.lifelinevending.com/node_modules/.bin/wrangler" <<'SH'
+#!/usr/bin/env bash
+case_dir=$(CDPATH='' cd -- "$(dirname "$0")/../../../../.." && pwd -P)
+exec "$case_dir/backend/wrangler-provider" "$@"
+SH
+  chmod +x "$project_provider_dir/home/projects/dash.lifelinevending.com/node_modules/.bin/wrangler"
+  rm "$project_provider_dir/fakebin/wrangler"
+  run_case "$project_provider_dir" status dash.cloudflare.deploy
+  expect_code 0 "$RUN_RC" "status should discover Wrangler in the registered project"
+  assert_contains "$RUN_OUT" ': available' "project-local Wrangler did not satisfy readiness"
+  assert_sentinel_absent_after_backend_cleanup "$project_provider_dir"
   pass "doctor, status, and dry-run use command-scoped delivery without leaks or OAuth fallback"
 }
 

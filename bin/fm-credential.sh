@@ -459,8 +459,20 @@ audit_append() { # <task> <alias> <adapter> <operation> <started> <class> <code>
     "$task" "$alias" "$adapter" "$operation" "$started" "$ended" "$class" "$code" >> "$audit"
 }
 
+alias_project_resolve() {
+  local project project_real
+  project="$FM_CREDENTIAL_HOME/projects/$ALIAS_PROJECT"
+  [ -d "$project" ] && [ ! -L "$project" ] || return 1
+  project_real=$(CDPATH='' cd -- "$project" 2>/dev/null && pwd -P) || return 1
+  case "$project_real" in
+    "$FM_CREDENTIAL_HOME/projects/"*) : ;;
+    *) return 1 ;;
+  esac
+  ALIAS_PROJECT_PATH=$project_real
+}
+
 task_metadata_load() { # <task-id>
-  local task=$1 meta key count value expected_project meta_project_real expected_real worktree_real
+  local task=$1 meta key count value meta_project_real worktree_real
   case "$task" in ''|*[!A-Za-z0-9._-]*) fail "invalid task id"; return 1 ;; esac
   meta="$FM_CREDENTIAL_HOME/state/$task.meta"
   regular_file_safe "$meta" record || {
@@ -485,18 +497,16 @@ task_metadata_load() { # <task-id>
     fail "credential operations require a ship task"
     return 1
   }
-  expected_project="$FM_CREDENTIAL_HOME/projects/$ALIAS_PROJECT"
-  [ -d "$expected_project" ] && [ ! -L "$expected_project" ] || {
+  alias_project_resolve || {
     fail "alias project is not registered in the effective FM_HOME"
     return 1
   }
-  expected_real=$(CDPATH='' cd -- "$expected_project" 2>/dev/null && pwd -P) || return 1
   [ -d "$TASK_PROJECT" ] && [ ! -L "$TASK_PROJECT" ] || {
     fail "task project path is unavailable or unsafe"
     return 1
   }
   meta_project_real=$(CDPATH='' cd -- "$TASK_PROJECT" 2>/dev/null && pwd -P) || return 1
-  [ "$meta_project_real" = "$expected_real" ] || {
+  [ "$meta_project_real" = "$ALIAS_PROJECT_PATH" ] || {
     fail "task project does not match the credential alias"
     return 1
   }
@@ -531,6 +541,10 @@ adapter_args_valid() { # <operation> [args...]
 status_alias() { # <alias> <print-prefix>
   local alias=$1 prefix=$2 class rc
   alias_load "$alias" || return 2
+  alias_project_resolve || {
+    printf '%s%s: missing-project\n' "$prefix" "$alias"
+    return 5
+  }
   if alias_expired; then
     printf '%s%s: expired\n' "$prefix" "$alias"
     return 4
@@ -543,7 +557,7 @@ status_alias() { # <alias> <print-prefix>
     printf '%s%s: missing-backend\n' "$prefix" "$alias"
     return 5
   }
-  resolve_wrangler || {
+  resolve_wrangler "$ALIAS_PROJECT_PATH" || {
     printf '%s%s: missing-provider\n' "$prefix" "$alias"
     return 5
   }
@@ -556,7 +570,7 @@ status_alias() { # <alias> <print-prefix>
     credential_cleanup
     return "$rc"
   fi
-  run_wrangler_capture "$FM_CREDENTIAL_HOME" whoami
+  run_wrangler_capture "$ALIAS_PROJECT_PATH" whoami
   rc=$FM_CREDENTIAL_RC
   if [ "$rc" -eq 0 ]; then
     if alias_expiring_soon; then
