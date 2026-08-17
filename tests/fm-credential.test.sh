@@ -390,6 +390,8 @@ test_task_and_operation_denials() {
   expect_code 2 "$RUN_RC" "ungranted operation should be a policy denial"
   run_case "$dir" exec task-a dash.cloudflare.deploy -- env
   expect_code 2 "$RUN_RC" "env must not be an adapter operation"
+  run_case "$dir" exec task-a dash.cloudflare.deploy -- get
+  expect_code 2 "$RUN_RC" "raw get must not be an adapter operation"
   assert_grep $'operation=invalid\t' "$dir/home/state/credential-audit.log" \
     "unrecognized operation was not canonicalized in the audit"
   rejected_operation=$'unrecognized\tsecret-looking-input\nforged=true'
