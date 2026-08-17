@@ -21,15 +21,20 @@ make_case() {
   chmod 0700 "$dir/home/config" "$dir/home/state" "$dir/home/data" "$dir/backend"
   printf 'ambient oauth must not be visible\n' > "$dir/ambient/.config/.wrangler/config/default.toml"
   : > "$dir/provider.log"
+  : > "$dir/broker.log"
   : > "$dir/argv.log"
   : > "$dir/pane.log"
   printf 'ok\n' > "$dir/behavior"
   cat > "$dir/fakebin/op" <<'SH'
 #!/usr/bin/env bash
+case_dir=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd -P)
+[ "${OP_SERVICE_ACCOUNT_TOKEN:-}" = broker-bootstrap-marker ] || exit 96
+[ -z "${OP_SESSION:-}" ] && [ -z "${FM_TEST_CASE:-}" ] || exit 97
+printf 'restricted-broker-identity\n' >> "$case_dir/broker.log"
 case "${1:-}" in
   read)
-    [ "$(cat "$FM_TEST_CASE/behavior")" != missing ] || exit 44
-    cat "$FM_TEST_CASE/backend/secret"
+    [ "$(cat "$case_dir/behavior")" != missing ] || exit 44
+    cat "$case_dir/backend/secret"
     ;;
   whoami) exit 0 ;;
   *) exit 2 ;;
@@ -37,19 +42,22 @@ esac
 SH
   cat > "$dir/fakebin/wrangler" <<'SH'
 #!/usr/bin/env bash
+case_dir=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd -P)
 token=${CLOUDFLARE_API_TOKEN:-}
-expected=$(cat "$FM_TEST_CASE/backend/secret")
+expected=$(cat "$case_dir/backend/secret")
 argv=$(ps -ww -p $$ -o command= 2>/dev/null || true)
 case "$argv" in
-  *"$token"*) printf 'token-in-argv\n' >> "$FM_TEST_CASE/provider.log"; exit 90 ;;
+  *"$token"*) printf 'token-in-argv\n' >> "$case_dir/provider.log"; exit 90 ;;
 esac
 [ -n "$token" ] && [ "$token" = "$expected" ] || exit 91
 [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] && [ -z "${OP_SESSION:-}" ] || exit 92
 [ "${CLOUDFLARE_ENV:-}" = production ] || exit 93
 [ ! -e "$HOME/.config/.wrangler/config/default.toml" ] || exit 94
-printf 'argv-clean token-present isolated-home operation=%s\n' "${1:-}" >> "$FM_TEST_CASE/provider.log"
-printf '%s\n' "$*" >> "$FM_TEST_CASE/argv.log"
-behavior=$(cat "$FM_TEST_CASE/behavior")
+[ -z "${CLOUDFLARE_API_BASE_URL:-}" ] && [ -z "${WRANGLER_LOG_PATH:-}" ] || exit 95
+[ -z "${WRANGLER_LOG_SANITIZE:-}" ] && [ -z "${FM_TEST_CASE:-}" ] || exit 98
+printf 'argv-clean token-present isolated-home operation=%s\n' "${1:-}" >> "$case_dir/provider.log"
+printf '%s\n' "$*" >> "$case_dir/argv.log"
+behavior=$(cat "$case_dir/behavior")
 case "$behavior" in
   invalid) printf 'Invalid API Token\n' >&2; exit 41 ;;
   revoked) printf 'API token revoked or expired\n' >&2; exit 45 ;;
@@ -76,7 +84,8 @@ esac
 SH
   cat > "$dir/fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >> "$FM_TEST_CASE/pane.log"
+case_dir=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd -P)
+printf '%s\n' "$*" >> "$case_dir/pane.log"
 exit 99
 SH
   chmod +x "$dir/fakebin/op" "$dir/fakebin/wrangler" "$dir/fakebin/tmux"
@@ -131,6 +140,8 @@ run_case() {
   RUN_ERR_FILE="$dir/run.stderr"
   FM_HOME="$dir/home" HOME="$dir/ambient" FM_TEST_CASE="$dir" \
     OP_SERVICE_ACCOUNT_TOKEN=broker-bootstrap-marker \
+    CLOUDFLARE_API_BASE_URL=https://attacker.invalid \
+    WRANGLER_LOG_PATH="$dir/hostile.log" WRANGLER_LOG_SANITIZE=false \
     PATH="$dir/fakebin:$BASE_PATH" \
     "$CREDENTIAL" "$@" > "$RUN_OUT_FILE" 2> "$RUN_ERR_FILE"
   RUN_RC=$?
@@ -156,7 +167,7 @@ assert_sentinel_absent_after_backend_cleanup() {
 }
 
 test_doctor_status_and_command_scoped_delivery() {
-  local dir
+  local dir identity_dir
   dir=$(make_case ready)
   set_secret "$dir"
   run_case "$dir" doctor
@@ -175,9 +186,23 @@ test_doctor_status_and_command_scoped_delivery() {
   assert_grep 'deploy --dry-run' "$dir/argv.log" "adapter did not own the dry-run argv"
   assert_grep 'exit_class=success' "$dir/home/state/credential-audit.log" \
     "successful execution did not append non-secret audit metadata"
+  [ ! -e "$dir/hostile.log" ] || fail "Wrangler inherited the caller's log path"
   [ ! -s "$dir/pane.log" ] || fail "credential broker used a pane or terminal transport"
   assert_no_runtime_residue "$dir"
   assert_sentinel_absent_after_backend_cleanup "$dir"
+  identity_dir=$(make_case missing-identity)
+  set_secret "$identity_dir"
+  RUN_OUT_FILE="$identity_dir/run.stdout"
+  RUN_ERR_FILE="$identity_dir/run.stderr"
+  env -u OP_SERVICE_ACCOUNT_TOKEN FM_HOME="$identity_dir/home" HOME="$identity_dir/ambient" \
+    OP_SESSION=ambient-personal-session PATH="$identity_dir/fakebin:$BASE_PATH" \
+    "$CREDENTIAL" status dash.cloudflare.deploy > "$RUN_OUT_FILE" 2> "$RUN_ERR_FILE"
+  RUN_RC=$?
+  expect_code 5 "$RUN_RC" "ambient 1Password identity must not satisfy the broker"
+  assert_contains "$(cat "$RUN_OUT_FILE")" ': missing-backend' \
+    "missing broker identity was not classified as unavailable"
+  [ ! -s "$identity_dir/broker.log" ] || fail "ambient identity reached the 1Password adapter"
+  rm -f "$identity_dir/backend/secret"
   pass "doctor, status, and dry-run use command-scoped delivery without leaks or OAuth fallback"
 }
 
@@ -389,10 +414,12 @@ test_concurrent_uses_and_cleanup() {
   printf 'concurrent\n' > "$dir/behavior"
   FM_HOME="$dir/home" HOME="$dir/ambient" FM_TEST_CASE="$dir" \
     OP_SERVICE_ACCOUNT_TOKEN=broker-bootstrap-marker PATH="$dir/fakebin:$BASE_PATH" \
+    CLOUDFLARE_API_BASE_URL=https://attacker.invalid WRANGLER_LOG_PATH="$dir/hostile.log" \
     "$CREDENTIAL" exec task-a dash.cloudflare.deploy -- whoami > "$dir/one.out" 2> "$dir/one.err" &
   pid1=$!
   FM_HOME="$dir/home" HOME="$dir/ambient" FM_TEST_CASE="$dir" \
     OP_SERVICE_ACCOUNT_TOKEN=broker-bootstrap-marker PATH="$dir/fakebin:$BASE_PATH" \
+    CLOUDFLARE_API_BASE_URL=https://attacker.invalid WRANGLER_LOG_PATH="$dir/hostile.log" \
     "$CREDENTIAL" exec task-a dash.cloudflare.deploy -- whoami > "$dir/two.out" 2> "$dir/two.err" &
   pid2=$!
   wait "$pid1"; rc1=$?

@@ -182,10 +182,13 @@ The 1Password reference names only the token field.
 The token receives only the account, zone, resource, and deployment permissions needed by that alias.
 Provider-side IP or TTL restrictions should be used when they fit the deployment environment.
 
-The adapter resolves the token through `op read` only inside the broker's private runtime.
-The broker's `OP_SERVICE_ACCOUNT_TOKEN` or `OP_SESSION` is removed before Wrangler starts.
+The adapter resolves the token through `op read` only inside the broker's private runtime and requires an explicitly supplied `OP_SERVICE_ACCOUNT_TOKEN` for the broker's restricted 1Password identity.
+An ambient `OP_SESSION`, desktop integration, or personal account is never an authentication fallback.
+The `op` child starts with an explicit empty environment plus only its isolated home, path, and broker service-account identity.
+The broker's 1Password identity is absent from Wrangler's environment.
 Wrangler receives `CLOUDFLARE_API_TOKEN` only in its exact child environment.
-Legacy Cloudflare key and email variables are removed from that child.
+Wrangler starts under `env -i` with only the adapter-owned token, path, isolated home, CI marker, exact policy environment, disabled keyring authentication, and disabled metrics setting.
+Caller controls such as alternate API endpoints, log paths, authentication variables, and inherited provider settings are absent from that child.
 The child receives an isolated temporary `HOME` and `XDG_CONFIG_HOME`, so the operator's stored Wrangler OAuth state is unavailable.
 [Cloudflare's Wrangler environment documentation](https://developers.cloudflare.com/workers/wrangler/system-environment-variables/) defines `CLOUDFLARE_API_TOKEN` as the automation credential.
 [Cloudflare's Wrangler command documentation](https://developers.cloudflare.com/workers/wrangler/commands/general/) gives the API-token environment variable precedence over stored OAuth credentials.

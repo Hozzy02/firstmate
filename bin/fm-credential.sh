@@ -301,11 +301,24 @@ credential_cleanup() {
 }
 
 resolve_secret() {
-  local secret_file error_file size rc
+  local secret_file error_file size rc op_path broker_token broker_home broker_xdg
   secret_file="$FM_CREDENTIAL_RUNTIME/secret"
   error_file="$FM_CREDENTIAL_RUNTIME/op.stderr"
-  command -v op >/dev/null 2>&1 || return 127
-  if op read "$ALIAS_REFERENCE" > "$secret_file" 2> "$error_file"; then
+  op_path=$(type -P op 2>/dev/null) || return 127
+  broker_token=${OP_SERVICE_ACCOUNT_TOKEN:-}
+  [ -n "$broker_token" ] || return 127
+  case "$broker_token" in *[[:space:]]*) return 127 ;; esac
+  broker_home="$FM_CREDENTIAL_RUNTIME/op-home"
+  broker_xdg="$FM_CREDENTIAL_RUNTIME/op-xdg"
+  mkdir -p "$broker_home" "$broker_xdg" || return 70
+  if /usr/bin/env -i PATH="${PATH:-/usr/bin:/bin}" HOME="$broker_home" XDG_CONFIG_HOME="$broker_xdg" \
+      /bin/bash -c '
+        IFS= read -r OP_SERVICE_ACCOUNT_TOKEN <&3 || exit 70
+        exec 3<&-
+        export OP_SERVICE_ACCOUNT_TOKEN
+        exec "$1" read "$2"
+      ' _ "$op_path" "$ALIAS_REFERENCE" 3<<< "$broker_token" \
+      > "$secret_file" 2> "$error_file"; then
     rc=0
   else
     rc=$?
@@ -363,17 +376,19 @@ run_wrangler_capture() { # <cwd> <operation> [args...]
   capture_bounded "$stderr_fifo" "$FM_CREDENTIAL_STDERR" &
   stderr_pid=$!
   (
-    unset OP_SESSION OP_SERVICE_ACCOUNT_TOKEN CLOUDFLARE_API_KEY CLOUDFLARE_EMAIL CF_API_KEY CF_API_EMAIL
     mkdir -p "$FM_CREDENTIAL_RUNTIME/wrangler-home" "$FM_CREDENTIAL_RUNTIME/xdg" || exit 70
-    export HOME="$FM_CREDENTIAL_RUNTIME/wrangler-home"
-    export XDG_CONFIG_HOME="$FM_CREDENTIAL_RUNTIME/xdg"
-    export CI=1
-    export CLOUDFLARE_API_TOKEN="$FM_CREDENTIAL_SECRET"
-    export CLOUDFLARE_ENV="$ALIAS_ENVIRONMENT"
-    export CLOUDFLARE_AUTH_USE_KEYRING=false
-    export WRANGLER_SEND_METRICS=false
     cd "$worktree" || exit 70
-    exec "$FM_CREDENTIAL_WRANGLER" "${command[@]}"
+    exec /usr/bin/env -i PATH="${PATH:-/usr/bin:/bin}" \
+      HOME="$FM_CREDENTIAL_RUNTIME/wrangler-home" \
+      XDG_CONFIG_HOME="$FM_CREDENTIAL_RUNTIME/xdg" \
+      CI=1 CLOUDFLARE_ENV="$ALIAS_ENVIRONMENT" \
+      CLOUDFLARE_AUTH_USE_KEYRING=false WRANGLER_SEND_METRICS=false \
+      /bin/bash -c '
+        IFS= read -r CLOUDFLARE_API_TOKEN <&3 || exit 70
+        exec 3<&-
+        export CLOUDFLARE_API_TOKEN
+        exec "$@"
+      ' _ "$FM_CREDENTIAL_WRANGLER" "${command[@]}" 3<<< "$FM_CREDENTIAL_SECRET"
   ) > "$stdout_fifo" 2> "$stderr_fifo"
   rc=$?
   wait "$stdout_pid" || capture_rc=1
@@ -524,6 +539,10 @@ status_alias() { # <alias> <print-prefix>
     printf '%s%s: missing-backend\n' "$prefix" "$alias"
     return 5
   }
+  [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] || {
+    printf '%s%s: missing-backend\n' "$prefix" "$alias"
+    return 5
+  }
   resolve_wrangler || {
     printf '%s%s: missing-provider\n' "$prefix" "$alias"
     return 5
@@ -620,7 +639,7 @@ command_exec() {
     fail "credential is expired"
     return 4
   fi
-  if ! command -v op >/dev/null 2>&1; then
+  if ! command -v op >/dev/null 2>&1 || [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
     audit_append "$task" "$alias" "$ALIAS_ADAPTER" "$operation" "$started" missing-backend 127 || true
     credential_cleanup
     fail "1Password backend is unavailable"
