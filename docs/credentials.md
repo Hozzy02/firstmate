@@ -125,7 +125,7 @@ A static token with an `expires_at` value in the next 30 days remains usable but
 Run an approved operation with:
 
 ```sh
-bin/fm-credential.sh exec <task-id> <alias> -- <adapter-operation> [args...]
+bin/fm-credential.sh exec <task-id> <alias> -- <adapter-operation>
 ```
 
 `exec` requires a safe, single-link task metadata file under the effective home's `state/` directory.
@@ -137,7 +137,8 @@ The recorded worktree becomes the provider command's working directory.
 The caller supplies an adapter operation rather than an executable.
 The adapter chooses either the recorded worktree's executable `node_modules/.bin/wrangler` or an executable `wrangler` found on `PATH`.
 The caller cannot request `env`, `printenv`, `sh`, `bash`, login, logout, auth, an arbitrary executable, or an unknown operation.
-The caller cannot pass `--cwd`, `--config`, `--env`, authentication flags, absolute paths, or parent-directory traversal.
+Version 1 uses an explicit empty caller-argument allowlist for each Wrangler operation.
+The caller cannot pass aliases, flags, positional arguments, paths, or boolean negations after the operation.
 The broker sets `CLOUDFLARE_ENV` from the alias, so command arguments cannot change the authorized environment.
 
 `exec` first probes the credential with `wrangler whoami` for deployment operations.

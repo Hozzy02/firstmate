@@ -293,7 +293,7 @@ PY
 }
 
 test_task_and_operation_denials() {
-  local dir
+  local dir rejected_operation
   dir=$(make_case denials)
   set_secret "$dir"
   run_case "$dir" exec task-a unknown.alias -- whoami
@@ -310,8 +310,25 @@ test_task_and_operation_denials() {
   expect_code 2 "$RUN_RC" "ungranted operation should be a policy denial"
   run_case "$dir" exec task-a dash.cloudflare.deploy -- env
   expect_code 2 "$RUN_RC" "env must not be an adapter operation"
+  assert_grep $'operation=invalid\t' "$dir/home/state/credential-audit.log" \
+    "unrecognized operation was not canonicalized in the audit"
+  rejected_operation=$'unrecognized\tsecret-looking-input\nforged=true'
+  run_case "$dir" exec task-a dash.cloudflare.deploy -- "$rejected_operation"
+  expect_code 2 "$RUN_RC" "unsafe operation text must be rejected"
+  assert_not_contains "$(cat "$dir/home/state/credential-audit.log")" "$rejected_operation" \
+    "caller-controlled operation text entered the audit"
+  assert_not_contains "$(cat "$dir/home/state/credential-audit.log")" 'forged=true' \
+    "caller-controlled operation text forged an audit entry"
   run_case "$dir" exec task-a dash.cloudflare.deploy -- whoami --env staging
   expect_code 2 "$RUN_RC" "caller must not override the policy environment"
+  run_case "$dir" exec task-a dash.cloudflare.deploy -- deploy -e staging
+  expect_code 2 "$RUN_RC" "Wrangler's environment alias must be rejected"
+  run_case "$dir" exec task-a dash.cloudflare.deploy -- deploy -c alternate.toml
+  expect_code 2 "$RUN_RC" "Wrangler's config alias must be rejected"
+  run_case "$dir" exec task-a dash.cloudflare.deploy -- deploy --name other-worker
+  expect_code 2 "$RUN_RC" "caller must not override the worker name"
+  run_case "$dir" exec task-a dash.cloudflare.deploy -- deploy-dry-run --no-dry-run
+  expect_code 2 "$RUN_RC" "caller must not negate the adapter-owned dry-run flag"
   run_case "$dir" exec task-a dash.cloudflare.deploy -- whoami sh -c printenv
   expect_code 2 "$RUN_RC" "shell and environment escape arguments must be denied"
   assert_no_runtime_residue "$dir"

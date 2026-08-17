@@ -8,7 +8,7 @@
 # Usage:
 #   fm-credential.sh doctor
 #   fm-credential.sh status <alias>
-#   fm-credential.sh exec <task-id> <alias> -- <adapter-operation> [args...]
+#   fm-credential.sh exec <task-id> <alias> -- <adapter-operation>
 #
 # There is deliberately no plaintext retrieval command.
 # doctor and status print classifications only.
@@ -493,19 +493,24 @@ task_metadata_load() { # <task-id>
   TASK_WORKTREE=$worktree_real
 }
 
-adapter_args_valid() {
-  local arg
-  for arg in "$@"; do
-    case "$arg" in
-      env|printenv|sh|bash|-c|login|logout|auth|auth:*|\
-      --cwd|--cwd=*|--config|--config=*|--env|--env=*|--environment|--environment=*|\
-      --api-token|--api-token=*|--token|--token=*|--auth|--auth=*|\
-      ..|/*|../*|*/../*|*/..|*=/*|*=../*|*=..)
-        fail "adapter argument is not allowed"
-        return 1
-        ;;
-    esac
-  done
+adapter_args_valid() { # <operation> [args...]
+  local operation=$1
+  shift
+  case "$operation" in
+    deploy)
+      [ "$#" -eq 0 ] || { fail "deploy does not allow caller arguments"; return 1; }
+      ;;
+    deploy-dry-run)
+      [ "$#" -eq 0 ] || { fail "deploy-dry-run does not allow caller arguments"; return 1; }
+      ;;
+    whoami)
+      [ "$#" -eq 0 ] || { fail "whoami does not allow caller arguments"; return 1; }
+      ;;
+    *)
+      fail "unrecognized adapter operation"
+      return 1
+      ;;
+  esac
 }
 
 status_alias() { # <alias> <print-prefix>
@@ -573,8 +578,7 @@ command_status() {
 }
 
 command_exec() {
-  local task alias operation started class rc audit_rc=0 adapter_argc
-  local -a adapter_args
+  local task alias operation started class rc audit_rc=0
   [ "$#" -ge 4 ] && [ "$3" = -- ] || {
     usage
     return 2
@@ -583,8 +587,6 @@ command_exec() {
   alias=$2
   operation=$4
   shift 4
-  adapter_argc=$#
-  adapter_args=("$@")
   validate_policy || return 1
   alias_load "$alias" || return 2
   task_metadata_load "$task" || return 2
@@ -595,7 +597,7 @@ command_exec() {
   }
   started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   case "$operation" in deploy|deploy-dry-run|whoami) : ;; *)
-    audit_append "$task" "$alias" "$ALIAS_ADAPTER" "$operation" "$started" policy-denied 2 || true
+    audit_append "$task" "$alias" "$ALIAS_ADAPTER" invalid "$started" policy-denied 2 || true
     credential_cleanup
     fail "unrecognized adapter operation"
     return 2
@@ -607,12 +609,10 @@ command_exec() {
     fail "credential alias does not grant this operation"
     return 2
   fi
-  if [ "$adapter_argc" -gt 0 ]; then
-    if ! adapter_args_valid "${adapter_args[@]}"; then
-      audit_append "$task" "$alias" "$ALIAS_ADAPTER" "$operation" "$started" policy-denied 2 || true
-      credential_cleanup
-      return 2
-    fi
+  if ! adapter_args_valid "$operation" "$@"; then
+    audit_append "$task" "$alias" "$ALIAS_ADAPTER" "$operation" "$started" policy-denied 2 || true
+    credential_cleanup
+    return 2
   fi
   if alias_expired; then
     audit_append "$task" "$alias" "$ALIAS_ADAPTER" "$operation" "$started" credential-expired 4 || true
@@ -653,11 +653,7 @@ command_exec() {
       return "$rc"
     fi
   fi
-  if [ "$adapter_argc" -gt 0 ]; then
-    run_wrangler_capture "$TASK_WORKTREE" "$operation" "${adapter_args[@]}"
-  else
-    run_wrangler_capture "$TASK_WORKTREE" "$operation"
-  fi
+  run_wrangler_capture "$TASK_WORKTREE" "$operation"
   rc=$FM_CREDENTIAL_RC
   redact_file "$FM_CREDENTIAL_STDOUT"
   redact_file "$FM_CREDENTIAL_STDERR" >&2
