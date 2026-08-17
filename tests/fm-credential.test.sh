@@ -67,6 +67,10 @@ case "$behavior" in
     printf 'provider stdout %s\n' "$token"
     printf 'provider stderr %s\n' "$token" >&2
     ;;
+  boundary)
+    head -c 65530 /dev/zero | tr '\0' x
+    printf '%s\n' "$token"
+    ;;
   large)
     head -c 70000 /dev/zero | tr '\0' x
     printf '\n'
@@ -233,7 +237,7 @@ SH
 }
 
 test_output_redaction_bound_and_exit_status() {
-  local dir size
+  local dir size sentinel_prefix
   dir=$(make_case output)
   set_secret "$dir"
   printf 'leak\n' > "$dir/behavior"
@@ -241,6 +245,13 @@ test_output_redaction_bound_and_exit_status() {
   expect_code 0 "$RUN_RC" "redacted provider command should preserve success"
   assert_contains "$RUN_OUT$RUN_ERR" '[REDACTED]' "provider output was not redacted"
   assert_not_contains "$RUN_OUT$RUN_ERR" "$SENTINEL" "provider output leaked the sentinel"
+  printf 'boundary\n' > "$dir/behavior"
+  run_case "$dir" exec task-a dash.cloudflare.deploy -- deploy
+  expect_code 0 "$RUN_RC" "boundary redaction should preserve success"
+  sentinel_prefix=${SENTINEL:0:8}
+  assert_contains "$RUN_OUT" '[output truncated at 65536 bytes]' \
+    "boundary output did not retain the truncation marker"
+  assert_not_contains "$RUN_OUT" "$sentinel_prefix" "token prefix leaked at the output boundary"
   printf 'large\n' > "$dir/behavior"
   run_case "$dir" exec task-a dash.cloudflare.deploy -- whoami
   expect_code 0 "$RUN_RC" "large provider output should preserve success"

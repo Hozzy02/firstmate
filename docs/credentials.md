@@ -145,7 +145,7 @@ The broker sets `CLOUDFLARE_ENV` from the alias, so command arguments cannot cha
 `exec` first probes the credential with `wrangler whoami` for deployment operations.
 The probe output is discarded on success.
 A failed probe stops deployment and returns the probe's real exit status with a non-secret failure class.
-The selected provider operation's output is capped at 65,536 bytes per stream and exact-value redacted.
+The selected provider operation captures one maximum-token-length beyond the 65,536-byte boundary, exact-value redacts that capture, and only then applies the final per-stream cap.
 The broker returns the selected provider operation's real exit status.
 
 Every authorized or denied `exec` attempt that reaches audit preflight appends one tab-separated line to `state/credential-audit.log`.

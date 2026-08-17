@@ -22,6 +22,7 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME_INPUT="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 
 OUTPUT_LIMIT=65536
+MAX_SECRET_BYTES=8192
 EXPIRY_WARNING_SECONDS=2592000
 FM_CREDENTIAL_HOME=
 FM_CREDENTIAL_POLICY=
@@ -326,7 +327,7 @@ resolve_secret() {
   [ "$rc" -eq 0 ] || return "$rc"
   size=$(wc -c < "$secret_file" | tr -d '[:space:]') || return 1
   case "$size" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$size" -gt 0 ] && [ "$size" -le 8192 ] || return 1
+  [ "$size" -gt 0 ] && [ "$size" -le "$MAX_SECRET_BYTES" ] || return 1
   FM_CREDENTIAL_SECRET=$(< "$secret_file")
   rm -f -- "$secret_file" "$error_file"
   [ -n "$FM_CREDENTIAL_SECRET" ] || return 1
@@ -350,7 +351,7 @@ resolve_wrangler() { # [worktree]
 capture_bounded() { # <fifo> <destination>
   local fifo=$1 destination=$2
   {
-    head -c "$((OUTPUT_LIMIT + 1))" > "$destination"
+    head -c "$((OUTPUT_LIMIT + MAX_SECRET_BYTES + 1))" > "$destination"
     cat >/dev/null
   } < "$fifo"
 }
@@ -416,24 +417,28 @@ provider_failure_class() {
 }
 
 redact_file() { # <path>
-  local path=$1 line prefix suffix size bounded="$FM_CREDENTIAL_RUNTIME/redacted-input"
-  size=$(wc -c < "$path" | tr -d '[:space:]') || size=0
-  if [ "$size" -gt "$OUTPUT_LIMIT" ]; then
-    head -c "$OUTPUT_LIMIT" "$path" > "$bounded"
-    path=$bounded
-  fi
+  local path=$1 line prefix suffix raw_size redacted_size
+  local redacted="$FM_CREDENTIAL_RUNTIME/redacted-output"
+  raw_size=$(wc -c < "$path" | tr -d '[:space:]') || raw_size=0
+  : > "$redacted" || return 1
   while IFS= read -r line || [ -n "$line" ]; do
     while [[ "$line" == *"$FM_CREDENTIAL_SECRET"* ]]; do
       prefix=${line%%"$FM_CREDENTIAL_SECRET"*}
       suffix=${line#*"$FM_CREDENTIAL_SECRET"}
       line="${prefix}[REDACTED]${suffix}"
     done
-    printf '%s\n' "$line"
+    printf '%s\n' "$line" >> "$redacted"
   done < "$path"
-  if [ "$size" -gt "$OUTPUT_LIMIT" ]; then
+  redacted_size=$(wc -c < "$redacted" | tr -d '[:space:]') || redacted_size=0
+  if [ "$redacted_size" -gt "$OUTPUT_LIMIT" ]; then
+    head -c "$OUTPUT_LIMIT" "$redacted"
+  else
+    cat "$redacted"
+  fi
+  if [ "$raw_size" -gt "$OUTPUT_LIMIT" ]; then
     printf '[output truncated at %s bytes]\n' "$OUTPUT_LIMIT"
   fi
-  rm -f -- "$bounded"
+  rm -f -- "$redacted"
 }
 
 audit_prepare() {
