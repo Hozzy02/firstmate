@@ -348,12 +348,75 @@ resolve_wrangler() { # [worktree]
   [ -x "$FM_CREDENTIAL_WRANGLER" ]
 }
 
-capture_bounded() { # <fifo> <destination>
-  local fifo=$1 destination=$2
-  {
-    head -c "$((OUTPUT_LIMIT + MAX_SECRET_BYTES + 1))" > "$destination"
-    cat >/dev/null
-  } < "$fifo"
+capture_redacted() { # <fifo> <destination>
+  local fifo=$1 destination=$2 python
+  python=$(type -P python3 2>/dev/null) || return 1
+  "$python" -c '
+import os
+import sys
+
+destination = sys.argv[1]
+limit = int(sys.argv[2])
+maximum = int(sys.argv[3])
+secret_parts = []
+while True:
+    part = os.read(3, maximum + 1)
+    if not part:
+        break
+    secret_parts.append(part)
+secret = b"".join(secret_parts)
+if secret.endswith(b"\n"):
+    secret = secret[:-1]
+if not secret or len(secret) > maximum:
+    raise SystemExit(1)
+
+flag = destination + ".truncated"
+try:
+    os.unlink(flag)
+except FileNotFoundError:
+    pass
+
+replacement = b"[REDACTED]"
+buffer = b""
+written = 0
+truncated = False
+
+with open(destination, "wb") as target:
+    def emit(data):
+        global written, truncated
+        remaining = max(0, limit - written)
+        if remaining:
+            target.write(data[:remaining])
+            written += min(len(data), remaining)
+        if len(data) > remaining:
+            truncated = True
+
+    while True:
+        chunk = sys.stdin.buffer.read(65536)
+        eof = not chunk
+        buffer += chunk
+        while buffer:
+            index = buffer.find(secret)
+            if index >= 0:
+                emit(buffer[:index])
+                emit(replacement)
+                buffer = buffer[index + len(secret):]
+                continue
+            if eof:
+                emit(buffer)
+                buffer = b""
+                break
+            safe = len(buffer) - len(secret) + 1
+            if safe > 0:
+                emit(buffer[:safe])
+                buffer = buffer[safe:]
+            break
+        if eof:
+            break
+
+if truncated:
+    open(flag, "wb").close()
+  ' "$destination" "$OUTPUT_LIMIT" "$MAX_SECRET_BYTES" < "$fifo" 3<<< "$FM_CREDENTIAL_SECRET"
 }
 
 run_wrangler_capture() { # <cwd> <operation> [args...]
@@ -372,9 +435,9 @@ run_wrangler_capture() { # <cwd> <operation> [args...]
   stdout_fifo="$FM_CREDENTIAL_RUNTIME/stdout.fifo"
   stderr_fifo="$FM_CREDENTIAL_RUNTIME/stderr.fifo"
   mkfifo "$stdout_fifo" "$stderr_fifo" || return 70
-  capture_bounded "$stdout_fifo" "$FM_CREDENTIAL_STDOUT" &
+  capture_redacted "$stdout_fifo" "$FM_CREDENTIAL_STDOUT" &
   stdout_pid=$!
-  capture_bounded "$stderr_fifo" "$FM_CREDENTIAL_STDERR" &
+  capture_redacted "$stderr_fifo" "$FM_CREDENTIAL_STDERR" &
   stderr_pid=$!
   (
     mkdir -p "$FM_CREDENTIAL_RUNTIME/wrangler-home" "$FM_CREDENTIAL_RUNTIME/xdg" || exit 70
@@ -416,29 +479,12 @@ provider_failure_class() {
   fi
 }
 
-redact_file() { # <path>
-  local path=$1 line prefix suffix raw_size redacted_size
-  local redacted="$FM_CREDENTIAL_RUNTIME/redacted-output"
-  raw_size=$(wc -c < "$path" | tr -d '[:space:]') || raw_size=0
-  : > "$redacted" || return 1
-  while IFS= read -r line || [ -n "$line" ]; do
-    while [[ "$line" == *"$FM_CREDENTIAL_SECRET"* ]]; do
-      prefix=${line%%"$FM_CREDENTIAL_SECRET"*}
-      suffix=${line#*"$FM_CREDENTIAL_SECRET"}
-      line="${prefix}[REDACTED]${suffix}"
-    done
-    printf '%s\n' "$line" >> "$redacted"
-  done < "$path"
-  redacted_size=$(wc -c < "$redacted" | tr -d '[:space:]') || redacted_size=0
-  if [ "$redacted_size" -gt "$OUTPUT_LIMIT" ]; then
-    head -c "$OUTPUT_LIMIT" "$redacted"
-  else
-    cat "$redacted"
-  fi
-  if [ "$raw_size" -gt "$OUTPUT_LIMIT" ]; then
+emit_capture() { # <path>
+  local path=$1
+  cat "$path"
+  if [ -f "$path.truncated" ]; then
     printf '[output truncated at %s bytes]\n' "$OUTPUT_LIMIT"
   fi
-  rm -f -- "$redacted"
 }
 
 audit_prepare() {
@@ -693,8 +739,8 @@ command_exec() {
   fi
   run_wrangler_capture "$TASK_WORKTREE" "$operation"
   rc=$FM_CREDENTIAL_RC
-  redact_file "$FM_CREDENTIAL_STDOUT"
-  redact_file "$FM_CREDENTIAL_STDERR" >&2
+  emit_capture "$FM_CREDENTIAL_STDOUT"
+  emit_capture "$FM_CREDENTIAL_STDERR" >&2
   if [ "$rc" -eq 0 ]; then
     class=success
   else

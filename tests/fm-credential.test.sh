@@ -71,6 +71,18 @@ case "$behavior" in
     head -c 65530 /dev/zero | tr '\0' x
     printf '%s\n' "$token"
     ;;
+  compression-boundary)
+    repeats=300
+    index=0
+    while [ "$index" -lt "$repeats" ]; do
+      printf '%s' "$token"
+      index=$((index + 1))
+    done
+    repeated_bytes=$((repeats * ${#token}))
+    fill=$((65536 + 8192 - 5 - repeated_bytes))
+    head -c "$fill" /dev/zero | tr '\0' x
+    printf '%s\n' "$token"
+    ;;
   large)
     head -c 70000 /dev/zero | tr '\0' x
     printf '\n'
@@ -252,6 +264,12 @@ test_output_redaction_bound_and_exit_status() {
   assert_contains "$RUN_OUT" '[output truncated at 65536 bytes]' \
     "boundary output did not retain the truncation marker"
   assert_not_contains "$RUN_OUT" "$sentinel_prefix" "token prefix leaked at the output boundary"
+  printf 'compression-boundary\n' > "$dir/behavior"
+  run_case "$dir" exec task-a dash.cloudflare.deploy -- deploy
+  expect_code 0 "$RUN_RC" "compressed boundary redaction should preserve success"
+  assert_contains "$RUN_OUT" '[REDACTED]' "compressed boundary tokens were not redacted"
+  assert_not_contains "$RUN_OUT" "${SENTINEL:0:5}" \
+    "token prefix leaked after earlier redactions compressed the stream"
   printf 'large\n' > "$dir/behavior"
   run_case "$dir" exec task-a dash.cloudflare.deploy -- whoami
   expect_code 0 "$RUN_RC" "large provider output should preserve success"
