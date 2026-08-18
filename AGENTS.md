@@ -184,7 +184,7 @@ A silent bootstrap section needs no action; for any printed actionable diagnosti
 Load `harness-adapters` before every spawn or recovery and before trust handling, skill invocation, interrupt, exit, resume, or adapter verification.
 The verified harnesses are `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, `kimi`, and `cursor`, plus `muse` for crewmates and scouts only; never dispatch on an unverified adapter.
 Worker auto-approve is the intentional default launch posture for every verified harness: `bin/fm-spawn.sh` uses Claude's `--dangerously-skip-permissions`, Codex's `--dangerously-bypass-approvals-and-sandbox`, OpenCode's `{"permission":{"*":"allow"}}`, Grok's `--always-approve`, Kimi's `--auto`, and Cursor's and Muse's `--yolo`, while Pi and pi-signed have no permission system.
-The only worker prompts outside that posture are one-time first-run directory-trust, hooks-review, or Claude bypass-permissions confirmation dialogs, which firstmate handles during the post-spawn check; these are not routine per-tool approval or a per-worker confirmation gate to enable auto-approve.
+Auto-approve governs routine tool execution, not the one-time first-run directory-trust, hooks-review, or Claude bypass-permissions confirmation dialogs that firstmate handles during the post-spawn check; Cursor's separate `--trust` flag and Muse's `--yolo` suppress workspace trust at launch.
 If static `config/crew-harness` or `config/secondmate-harness` names an unverified adapter, report it and fall back only to a verified adapter rather than launching it.
 
 `docs/configuration.md` owns dispatch-profile and runtime-backend schemas, `bin/fm-harness.sh` owns static resolution, and `bin/fm-spawn.sh` owns launch flags and fail-closed validation.
