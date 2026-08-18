@@ -312,6 +312,8 @@ resolve_secret() {
   broker_home="$FM_CREDENTIAL_RUNTIME/op-home"
   broker_xdg="$FM_CREDENTIAL_RUNTIME/op-xdg"
   mkdir -p "$broker_home" "$broker_xdg" || return 70
+  # The nested Bash expands these parameters after reading the broker token from fd 3.
+  # shellcheck disable=SC2016
   if /usr/bin/env -i PATH="${PATH:-/usr/bin:/bin}" HOME="$broker_home" XDG_CONFIG_HOME="$broker_xdg" \
       /bin/bash -c '
         IFS= read -r OP_SERVICE_ACCOUNT_TOKEN <&3 || exit 70
