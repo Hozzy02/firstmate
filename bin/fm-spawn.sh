@@ -132,6 +132,10 @@
 #   --scout records kind=scout in the task's meta (report deliverable, scratch worktree;
 #   see AGENTS.md task lifecycle); --secondmate records kind=secondmate and launches in a
 #   provisioned firstmate home; the default is kind=ship.
+#   A ship or scout <task-id> under a durable dispatch restriction
+#   (bin/fm-dispatch-restrict.sh) is refused here rather than launched; a
+#   --secondmate <task-id> is exempt because that id names the secondmate's
+#   own identity, not a backlog task.
 #   Before a secondmate launch, the home is locally fast-forwarded to the primary
 #   default-branch commit when safe; skipped syncs warn and launch unchanged.
 #   Ship/scout spawns refuse to launch unless the resolved task path is a real
@@ -262,6 +266,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-trace-context-lib.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
+# shellcheck source=bin/fm-dispatch-restrict-lib.sh
+. "$SCRIPT_DIR/fm-dispatch-restrict-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -1068,6 +1074,19 @@ else
   ARG3=${POS[2]:-}
 fi
 [ -z "$HARNESS_ARG" ] || ARG3=$HARNESS_ARG
+
+# Captain dispatch restriction (bin/fm-dispatch-restrict.sh): a durable,
+# per-task-id record independent of the backlog and of tasks-axi's own hold
+# flag, so it survives that task completing, being reopened, or being
+# re-queued (AGENTS.md section 10). Ship and scout spawns only - a
+# --secondmate <task-id> here names the secondmate's own persistent
+# identity, not a backlog task, so it is out of scope for this gate. KIND is
+# authoritative for both a fresh spawn and a --relaunch by this point.
+if [ "$KIND" != secondmate ] && fm_dispatch_restrict_active "$DATA" "$ID"; then
+  echo "error: task $ID is under a captain dispatch restriction set by ${FM_DISPATCH_RESTRICT_BY:-unknown} on ${FM_DISPATCH_RESTRICT_AT:-an unknown date}: ${FM_DISPATCH_RESTRICT_REASON:-no reason recorded}" >&2
+  echo "error: this spawn is refused; lift it deliberately first with: bin/fm-dispatch-restrict.sh lift $ID" >&2
+  exit 1
+fi
 
 shell_quote() {
   printf "'"

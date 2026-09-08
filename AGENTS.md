@@ -85,6 +85,7 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   secondmates.md      local and remote secondmate routing table; firstmate-private, maintained by the secondmate seed helpers (section 6)
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when kind=secondmate
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
+  dispatch-restrictions/<id>  durable captain dispatch restriction for one task id; created, listed, and removed only by bin/fm-dispatch-restrict.sh (section 10); untouched by task completion, teardown, or re-queueing
 projects/            cloned repos; gitignored; read-only except under hard rule 1's concrete captain-approved project operation exception
 state/               runtime records and signals; gitignored
   <id>.status        appended by crewmates: "<state>: <note>" wake-event lines, not current-state truth
@@ -483,6 +484,8 @@ It tracks work items only, never agents; persistent secondmates never appear as 
 Work routed to a secondmate is recorded in that secondmate home's own backlog, not the main backlog.
 When a main-side thread such as a pending captain decision or relay reminder is worth durable tracking, file it as its own work item; use `tasks-axi hold <id> --reason "<reason>" --kind captain` for a captain-gated thread.
 Unresolved decisions discovered by investigations or visual reviews follow `decision-hold-lifecycle`, which owns their mandatory backlog lifecycle.
+A `tasks-axi hold` is not durable enough for a captain's "keep this queued, never dispatch" instruction: completing any related task clears it.
+For that instruction, use `bin/fm-dispatch-restrict.sh set` instead; `bin/fm-spawn.sh` then refuses a ship or scout spawn for that task id until an explicit `bin/fm-dispatch-restrict.sh lift` removes it, independent of the backlog backend and of task completion, teardown, or re-queueing (see the script's own header for exact usage).
 Update the backlog on every dispatch, completion, and decision for a work item.
 Re-evaluate queued work after every teardown and heartbeat, dispatching items only when dependencies and time gates have cleared.
 

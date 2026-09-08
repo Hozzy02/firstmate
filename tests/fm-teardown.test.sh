@@ -579,6 +579,52 @@ test_local_only_fork_remote_allows() {
   pass "local-only worktree with HEAD on a fork remote is torn down (fix holds)"
 }
 
+# Regression for the vps01-workflow-count-correction incident: completing a
+# task used to clear ONLY the tasks-axi hold flag, which was the whole
+# protection a captain "keep this queued" instruction relied on. A dispatch
+# restriction (bin/fm-dispatch-restrict.sh) lives in a separate durable
+# record teardown never touches, so it must still be there - and still list
+# as active - after this exact ALLOW/complete teardown path runs to success.
+test_dispatch_restriction_survives_teardown_completion() {
+  local case_dir out rc
+  case_dir=$(make_case dispatch-restrict-survives)
+  write_meta "$case_dir" local-only ship
+  wt_commit "$case_dir" "fix the thing"
+  add_fork_with_pushed_branch "$case_dir"
+  mkdir -p "$case_dir/data"
+
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$case_dir" FM_STATE_OVERRIDE="$case_dir/state" \
+    FM_DATA_OVERRIDE="$case_dir/data" FM_CONFIG_OVERRIDE="$case_dir/config" \
+    "$ROOT/bin/fm-dispatch-restrict.sh" set task-x1 \
+      --reason "captain: keep queued pending vendor migration" --by captain > /dev/null \
+    || fail "fixture: could not set the dispatch restriction"
+  assert_present "$case_dir/data/dispatch-restrictions/task-x1" \
+    "fixture: restriction record was not written"
+
+  set +e
+  FM_ROOT_OVERRIDE="$ROOT" \
+    FM_STATE_OVERRIDE="$case_dir/state" \
+    FM_CONFIG_OVERRIDE="$case_dir/config" \
+    FM_DATA_OVERRIDE="$case_dir/data" \
+    PATH="$case_dir/fakebin:${FM_TEARDOWN_TEST_PATH:-$PATH}" \
+    "$TEARDOWN" task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "teardown should succeed (task fully completed)"
+  assert_absent "$case_dir/state/task-x1.meta" "teardown did not actually complete the task"
+  assert_present "$case_dir/data/dispatch-restrictions/task-x1" \
+    "the dispatch restriction was cleared by task completion - the exact incident this fixes"
+
+  out=$(FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$case_dir" FM_STATE_OVERRIDE="$case_dir/state" \
+    FM_DATA_OVERRIDE="$case_dir/data" FM_CONFIG_OVERRIDE="$case_dir/config" \
+    "$ROOT/bin/fm-dispatch-restrict.sh" list)
+  assert_contains "$out" 'task-x1' \
+    "the restriction no longer lists after the task it names has completed"
+
+  pass "a dispatch restriction survives the exact completion path that used to clear the tasks-axi hold flag"
+}
+
 test_teardown_prompts_tasks_axi_done_when_compatible() {
   local case_dir out
   case_dir=$(make_case tasks-axi-reminder)
@@ -2592,6 +2638,7 @@ EOF
 }
 
 test_local_only_fork_remote_allows
+test_dispatch_restriction_survives_teardown_completion
 test_teardown_prompts_tasks_axi_done_when_compatible
 test_teardown_manual_backend_prompts_hand_edit_even_when_tasks_axi_present
 test_local_only_truly_unpushed_refuses
