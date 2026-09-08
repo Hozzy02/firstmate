@@ -3,6 +3,7 @@
 #
 # Usage:
 #   fm-backlog-receive.sh state/handoff/<secondmate-id>.outbox.md <bytes> <sha256> <generation>
+#   < dispatch-restriction-payload
 #
 # The delivered file must be a non-symlink backlog-format scratch file confined
 # to FM_HOME/state/handoff. Every item must be Queued. Keys already present in
@@ -111,7 +112,19 @@ ID=${NAME%.outbox.md}
 case "$ID" in ''|*[!A-Za-z0-9._-]*) die "delivered outbox id is unsafe" ;; esac
 TRANSFER_LOCK="$PARENT_REAL/.$ID.upload.lock"
 fm_lock_acquire_wait "$TRANSFER_LOCK" || die "cannot lock delivered outbox"
-trap 'fm_lock_release "$TRANSFER_LOCK" || true' EXIT
+RESTRICTION_STAGE=$(umask 077; mktemp -d "$PARENT_REAL/.restrictions.XXXXXX") \
+  || die "cannot stage dispatch restrictions"
+cleanup_receive() {
+  local lock
+  for lock in "${ACTIVE_TASK_LOCKS[@]}"; do
+    [ -n "$lock" ] || continue
+    fm_lock_release "$lock" || true
+  done
+  rm -rf -- "$RESTRICTION_STAGE"
+  fm_lock_release "$TRANSFER_LOCK" || true
+}
+ACTIVE_TASK_LOCKS=("")
+trap cleanup_receive EXIT
 [ -f "$DELIVERED" ] && [ ! -L "$DELIVERED" ] || die "delivered outbox is not a non-symlink regular file"
 GENERATION_FILE="$PARENT_REAL/.$ID.upload-generation"
 [ -f "$GENERATION_FILE" ] && [ ! -L "$GENERATION_FILE" ] || die "delivered outbox generation is unavailable or unsafe"
@@ -141,12 +154,81 @@ KEYS=()
 while IFS= read -r key; do
   [ -n "$key" ] && KEYS+=("$key")
 done < <(list_keys "$DELIVERED")
+while IFS= read -r key; do
+  case "$key" in ''|.*|*[!A-Za-z0-9._-]*) die "delivered outbox has an unsafe task id" ;; esac
+  task_lock="$FM_HOME/state/.spawn-$key.lock"
+  fm_lock_acquire_wait "$task_lock" || die "cannot lock destination task $key"
+  ACTIVE_TASK_LOCKS+=("$task_lock")
+done < <(printf '%s\n' "${KEYS[@]}" | LC_ALL=C sort -u)
 for key in "${KEYS[@]}"; do
   section=$(backlog_key_section "$DELIVERED" "$key") || die "delivered key disappeared during classification: $key"
   [ "$section" = '## Queued' ] || die "delivered outbox contains non-Queued item $key under $section"
 done
 
+IFS= read -r RESTRICTION_HEADER || die "dispatch restriction payload is missing"
+[ "$RESTRICTION_HEADER" = 'FM-DISPATCH-RESTRICTIONS 1' ] || die "dispatch restriction payload is malformed"
+while IFS=$'\t' read -r presence key encoded extra; do
+  [ -n "$presence$key$encoded$extra" ] || continue
+  case "$presence" in
+    present) [ -n "$encoded" ] && [ -z "$extra" ] || die "dispatch restriction payload is malformed" ;;
+    absent) [ -z "$encoded$extra" ] || die "dispatch restriction payload is malformed" ;;
+    *) die "dispatch restriction payload is malformed" ;;
+  esac
+  case "$key" in ''|.*|*[!A-Za-z0-9._-]*) die "dispatch restriction payload has an unsafe task id" ;; esac
+  backlog_key_section "$DELIVERED" "$key" >/dev/null 2>&1 \
+    || die "dispatch restriction payload names an item outside the delivered outbox"
+  [ ! -e "$RESTRICTION_STAGE/$key.present" ] && [ ! -e "$RESTRICTION_STAGE/$key.absent" ] \
+    || die "dispatch restriction payload repeats task $key"
+  if [ "$presence" = absent ]; then
+    : > "$RESTRICTION_STAGE/$key.absent"
+    continue
+  fi
+  case "$encoded" in ''|*[!A-Za-z0-9+/=]*) die "dispatch restriction payload encoding is malformed" ;; esac
+  perl -MMIME::Base64=decode_base64 -e 'print decode_base64($ARGV[0])' "$encoded" \
+    > "$RESTRICTION_STAGE/$key.present" || die "dispatch restriction payload could not be decoded"
+  normalized=$(perl -MMIME::Base64=encode_base64 -0777 -ne 'print encode_base64($_, "")' "$RESTRICTION_STAGE/$key.present") \
+    || die "dispatch restriction payload could not be verified"
+  [ "$normalized" = "$encoded" ] || die "dispatch restriction payload encoding is malformed"
+done
+for key in "${KEYS[@]}"; do
+  [ -e "$RESTRICTION_STAGE/$key.present" ] || [ -e "$RESTRICTION_STAGE/$key.absent" ] \
+    || die "dispatch restriction payload omits task $key"
+done
+
 mkdir -p "$FM_HOME/data"
+[ -d "$FM_HOME/data" ] && [ ! -L "$FM_HOME/data" ] || die "destination data directory is unsafe"
+if find "$RESTRICTION_STAGE" -type f -print -quit | grep -q .; then
+  RESTRICTION_DEST="$FM_HOME/data/dispatch-restrictions"
+  mkdir -p "$RESTRICTION_DEST" || die "cannot create destination dispatch restriction directory"
+  [ -d "$RESTRICTION_DEST" ] && [ ! -L "$RESTRICTION_DEST" ] \
+    || die "destination dispatch restriction directory is unsafe"
+  for staged in "$RESTRICTION_STAGE"/*; do
+    [ -f "$staged" ] || continue
+    name=$(basename "$staged")
+    key=${name%.*}
+    destination="$RESTRICTION_DEST/$key"
+    if [ "${name##*.}" = absent ]; then
+      if [ -e "$destination" ] || [ -L "$destination" ]; then
+        [ -f "$destination" ] && [ ! -L "$destination" ] \
+          || die "destination dispatch restriction for $key is unsafe"
+        rm -f -- "$destination" || die "cannot lift destination dispatch restriction for $key"
+      fi
+      continue
+    fi
+    if [ -e "$destination" ] || [ -L "$destination" ]; then
+      if [ ! -f "$destination" ] || [ -L "$destination" ] || ! cmp -s "$staged" "$destination"; then
+        die "destination dispatch restriction for $key is unsafe or conflicting"
+      fi
+      continue
+    fi
+    tmp=$(umask 077; mktemp "$RESTRICTION_DEST/.restriction.XXXXXX") \
+      || die "cannot stage destination dispatch restriction for $key"
+    if ! cp -p -- "$staged" "$tmp" || ! mv -f -- "$tmp" "$destination"; then
+      rm -f -- "$tmp"
+      die "cannot install destination dispatch restriction for $key"
+    fi
+  done
+fi
 DEST_CREATED=0
 if [ ! -f "$DEST" ]; then
   printf '## In flight\n\n## Queued\n\n## Done\n' > "$DEST"
@@ -182,6 +264,12 @@ for key in "${KEYS[@]}"; do
     || die "receipt verification failed for $key; delivered outbox is preserved"
 done
 rm -f -- "$DELIVERED" || die "receipt succeeded but delivered scratch cleanup failed"
+for task_lock in "${ACTIVE_TASK_LOCKS[@]}"; do
+  [ -n "$task_lock" ] || continue
+  fm_lock_release "$task_lock" || die "receipt succeeded but task lock cleanup failed"
+done
+ACTIVE_TASK_LOCKS=("")
 fm_lock_release "$TRANSFER_LOCK" || die "receipt succeeded but transfer lock cleanup failed"
+rm -rf -- "$RESTRICTION_STAGE"
 trap - EXIT
 printf 'received: %s moved=%s already=%s\n' "$(basename "$REL" .outbox.md)" "${#TO_MOVE[@]}" "${#ALREADY[@]}"

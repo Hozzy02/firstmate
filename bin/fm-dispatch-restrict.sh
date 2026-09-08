@@ -57,7 +57,15 @@ case "$CMD" in
   *) echo "error: unknown subcommand '$CMD'" >&2; usage >&2; exit 2 ;;
 esac
 
-RESTRICT_LOCK="$STATE/.dispatch-restrictions.lock"
+RESTRICT_LOCK=
+
+release_restrict_lock() {
+  if [ -n "$RESTRICT_LOCK" ]; then
+    fm_lock_release "$RESTRICT_LOCK" || true
+    RESTRICT_LOCK=
+  fi
+}
+trap release_restrict_lock EXIT
 
 case "$CMD" in
   list)
@@ -83,14 +91,15 @@ case "$CMD" in
     case "$REASON" in *$'\n'*) echo "error: --reason must be single-line" >&2; exit 2 ;; esac
     case "$BY" in *$'\n'*) echo "error: --by must be single-line" >&2; exit 2 ;; esac
     mkdir -p "$STATE" || { echo "error: could not create state directory" >&2; exit 1; }
+    RESTRICT_LOCK="$STATE/.spawn-$ID.lock"
     fm_lock_acquire_wait "$RESTRICT_LOCK"
     AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
     if fm_dispatch_restrict_write "$DATA" "$ID" "$BY" "$AT" "$REASON"; then
-      fm_lock_release "$RESTRICT_LOCK" || true
+      release_restrict_lock
       printf 'restricted %s (by=%s at=%s reason=%s)\n' "$ID" "$BY" "$AT" "$REASON"
       exit 0
     fi
-    fm_lock_release "$RESTRICT_LOCK" || true
+    release_restrict_lock
     echo "error: could not write dispatch restriction for $ID" >&2
     exit 1
     ;;
@@ -99,18 +108,20 @@ case "$CMD" in
     shift || true
     [ "$#" -eq 0 ] || { echo "error: lift takes exactly one task id" >&2; exit 2; }
     fm_task_id_path_safe "$ID" || { echo "error: invalid task id" >&2; exit 2; }
+    mkdir -p "$STATE" || { echo "error: could not create state directory" >&2; exit 1; }
+    RESTRICT_LOCK="$STATE/.spawn-$ID.lock"
     fm_lock_acquire_wait "$RESTRICT_LOCK"
     if fm_dispatch_restrict_active "$DATA" "$ID"; then
       if fm_dispatch_restrict_lift "$DATA" "$ID"; then
-        fm_lock_release "$RESTRICT_LOCK" || true
+        release_restrict_lock
         printf 'lifted %s\n' "$ID"
         exit 0
       fi
-      fm_lock_release "$RESTRICT_LOCK" || true
+      release_restrict_lock
       echo "error: could not lift dispatch restriction for $ID" >&2
       exit 1
     fi
-    fm_lock_release "$RESTRICT_LOCK" || true
+    release_restrict_lock
     echo "error: $ID is not currently restricted; nothing to lift" >&2
     exit 1
     ;;

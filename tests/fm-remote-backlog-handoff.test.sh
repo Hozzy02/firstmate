@@ -198,6 +198,8 @@ EOF
 # remains the whole recovery record, the primary dispatch queue is already
 # empty, and a blind retry is not performed inside the transport call.
 write_backlog $'- [ ] ios-a - first iOS task (repo: alpha)\n- [ ] ios-b - dependent iOS task (repo: alpha) blocked-by: ios-a - waits'
+FM_HOME="$PARENT" "$ROOT/bin/fm-dispatch-restrict.sh" set ios-a \
+  --reason "captain hold" --by captain >/dev/null || fail "fixture restriction failed"
 : > "$SSH_COUNT"
 set +e
 FM_FAKE_SSH_MODE=after-receive handoff_env "$ROOT/bin/fm-backlog-handoff.sh" ios ios-a ios-b \
@@ -217,6 +219,10 @@ if ! grep -F ios-a "$REMOTE/data/backlog.md" >/dev/null; then
   fail "remote atomic receipt did not deliver ios-a before the dropped acknowledgement"
 fi
 assert_grep 'ios-b' "$REMOTE/data/backlog.md" "remote atomic receipt did not deliver ios-b before the dropped acknowledgement"
+assert_present "$REMOTE/data/dispatch-restrictions/ios-a" \
+  "remote receipt published a restricted task without its restriction"
+cmp -s "$PARENT/data/dispatch-restrictions/ios-a" "$REMOTE/data/dispatch-restrictions/ios-a" \
+  || fail "remote receipt changed the dispatch restriction record"
 [ "$(cat "$SSH_COUNT")" -eq 2 ] || fail "transport retried an ambiguously completed command"
 pass "ambiguous receipt leaves one durable outbox and no duplicate dispatchable source"
 

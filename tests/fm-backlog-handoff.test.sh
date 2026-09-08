@@ -539,6 +539,35 @@ EOF
   pass "registry entry without (home: ...) fails cleanly with has no home"
 }
 
+test_dispatch_restriction_moves_with_item() {
+  local home="$TMP_ROOT/restriction-main"
+  local sub="$TMP_ROOT/restriction-sub"
+  setup_homes "$home" "$sub"
+  cat > "$home/data/backlog.md" <<'EOF'
+## Queued
+- [ ] restricted-item - remains restricted after handoff (repo: alpha)
+- [ ] lifted-item - remains unrestricted after handoff (repo: alpha)
+
+## Done
+EOF
+  FM_HOME="$home" "$ROOT/bin/fm-dispatch-restrict.sh" set restricted-item \
+    --reason "captain hold" --by captain >/dev/null || fail "fixture restriction failed"
+  FM_HOME="$sub" "$ROOT/bin/fm-dispatch-restrict.sh" set lifted-item \
+    --reason "obsolete hold" --by captain >/dev/null || fail "destination fixture restriction failed"
+
+  FM_HOME="$home" "$ROOT/bin/fm-backlog-handoff.sh" design restricted-item lifted-item >/dev/null \
+    || fail "restricted item handoff failed"
+
+  assert_present "$sub/data/dispatch-restrictions/restricted-item" \
+    "handoff did not copy the dispatch restriction into the destination home"
+  cmp -s "$home/data/dispatch-restrictions/restricted-item" \
+    "$sub/data/dispatch-restrictions/restricted-item" \
+    || fail "handoff changed the dispatch restriction record"
+  assert_absent "$sub/data/dispatch-restrictions/lifted-item" \
+    "handoff did not preserve the source home's lifted restriction state"
+  pass "local handoff carries set and lifted dispatch restriction state"
+}
+
 test_body_moves_when_followed_by_another_item
 test_body_moves_when_followed_by_section_heading
 test_multi_paragraph_body_with_internal_blanks_moves_whole
@@ -550,5 +579,6 @@ test_noncanonical_indented_continuations_refuse_without_changes
 test_indented_heading_is_not_section_boundary
 test_registry_home_with_pre_home_parentheses
 test_registry_home_missing_field_fails_cleanly
+test_dispatch_restriction_moves_with_item
 
 echo "ALL TESTS PASSED"

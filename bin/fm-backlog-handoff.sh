@@ -62,10 +62,19 @@ MAIN_BACKLOG="$DATA/backlog.md"
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-pr-lib.sh
+. "$SCRIPT_DIR/fm-pr-lib.sh"
 
 ACTIVE_HANDOFF_LOCK=
 ACTIVE_REGISTRY_LOCK=
+ACTIVE_TASK_LOCKS=("")
 release_remote_locks() {
+  local lock
+  for lock in "${ACTIVE_TASK_LOCKS[@]}"; do
+    [ -n "$lock" ] || continue
+    fm_lock_release "$lock" || true
+  done
+  ACTIVE_TASK_LOCKS=("")
   if [ -n "$ACTIVE_HANDOFF_LOCK" ]; then
     fm_lock_release "$ACTIVE_HANDOFF_LOCK"
     ACTIVE_HANDOFF_LOCK=
@@ -270,50 +279,137 @@ outbox_item_count() { # <path>
   awk '/^- \[[ x]\] / { count++ } END { print count + 0 }' "$1"
 }
 
+acquire_task_locks() { # <state-dir> <keys...>
+  local state_dir=$1 key lock
+  shift
+  mkdir -p "$state_dir" || return 1
+  while IFS= read -r key; do
+    fm_task_id_path_safe "$key" || continue
+    lock="$state_dir/.spawn-$key.lock"
+    fm_lock_acquire_wait "$lock"
+    ACTIVE_TASK_LOCKS+=("$lock")
+  done < <(printf '%s\n' "$@" | LC_ALL=C sort -u)
+}
+
+copy_local_restrictions() { # <destination-data> <keys...>
+  local destination_data=$1 key source destination dir tmp
+  shift
+  dir="$destination_data/dispatch-restrictions"
+  for key in "$@"; do
+    fm_task_id_path_safe "$key" || continue
+    source="$DATA/dispatch-restrictions/$key"
+    destination="$dir/$key"
+    if [ ! -e "$source" ] && [ ! -L "$source" ]; then
+      if [ -e "$destination" ] || [ -L "$destination" ]; then
+        [ -f "$destination" ] && [ ! -L "$destination" ] || {
+          echo "error: destination dispatch restriction for $key is unsafe" >&2
+          return 1
+        }
+        rm -f -- "$destination" || return 1
+      fi
+      continue
+    fi
+    [ -f "$source" ] && [ ! -L "$source" ] || {
+      echo "error: dispatch restriction for $key is unsafe: $source" >&2
+      return 1
+    }
+    mkdir -p "$dir" || return 1
+    [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
+    if [ -e "$destination" ] || [ -L "$destination" ]; then
+      if [ ! -f "$destination" ] || [ -L "$destination" ] || ! cmp -s "$source" "$destination"; then
+        echo "error: destination dispatch restriction for $key is unsafe or conflicting" >&2
+        return 1
+      fi
+      continue
+    fi
+    tmp=$(umask 077; mktemp "$dir/.restriction.XXXXXX") || return 1
+    if ! cp -p -- "$source" "$tmp" || ! mv -f -- "$tmp" "$destination"; then
+      rm -f -- "$tmp"
+      return 1
+    fi
+  done
+}
+
+list_keys() { # <file>
+  awk '
+    /^- \[[ x]\] / {
+      rest=$0; sub(/^- \[[ x]\] +/, "", rest); id=rest; sub(/[ \t].*/, "", id)
+      if (id != "" && !seen[id]++) print id
+    }
+  ' "$1"
+}
+
+build_remote_restriction_payload() { # <outbox> <payload>
+  local outbox=$1 payload=$2 key source encoded
+  printf 'FM-DISPATCH-RESTRICTIONS 1\n' > "$payload" || return 1
+  while IFS= read -r key; do
+    fm_task_id_path_safe "$key" || continue
+    source="$DATA/dispatch-restrictions/$key"
+    if [ ! -e "$source" ] && [ ! -L "$source" ]; then
+      printf 'absent\t%s\n' "$key" >> "$payload" || return 1
+      continue
+    fi
+    [ -f "$source" ] && [ ! -L "$source" ] || {
+      echo "error: dispatch restriction for $key is unsafe: $source" >&2
+      return 1
+    }
+    encoded=$(perl -MMIME::Base64=encode_base64 -0777 -ne 'print encode_base64($_, "")' "$source") || return 1
+    printf 'present\t%s\t%s\n' "$key" "$encoded" >> "$payload" || return 1
+  done < <(list_keys "$outbox")
+}
+
 remote_deliver_outbox() { # <secondmate-id> <outbox-path>
-  local id=$1 outbox=$2 remote_rel receive_out snapshot bytes hash generation counter counter_tmp current
+  local id=$1 outbox=$2 remote_rel receive_out snapshot restrictions bytes hash generation counter counter_tmp current
   [ -f "$outbox" ] && [ ! -L "$outbox" ] || {
     echo "error: pending outbox is unavailable or unsafe: $outbox" >&2
     return 1
   }
   snapshot=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-handoff-payload.XXXXXX") || return 1
+  restrictions=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-handoff-restrictions.XXXXXX") \
+    || { rm -f -- "$snapshot"; return 1; }
+  if ! build_remote_restriction_payload "$outbox" "$restrictions"; then
+    rm -f -- "$snapshot" "$restrictions"
+    return 1
+  fi
   if ! cp -p -- "$outbox" "$snapshot"; then
-    rm -f -- "$snapshot"
+    rm -f -- "$snapshot" "$restrictions"
     return 1
   fi
   bytes=$(LC_ALL=C wc -c < "$snapshot" | tr -d ' ')
-  hash=$(sha256_file "$snapshot") || { rm -f -- "$snapshot"; return 1; }
+  hash=$(sha256_file "$snapshot") || { rm -f -- "$snapshot" "$restrictions"; return 1; }
   counter="$STATE/.remote-handoff-$id.generation"
   current=0
   if [ -e "$counter" ] || [ -L "$counter" ]; then
-    [ -f "$counter" ] && [ ! -L "$counter" ] || { rm -f -- "$snapshot"; return 1; }
-    IFS= read -r current < "$counter" || { rm -f -- "$snapshot"; return 1; }
-    case "$current" in ''|*[!0-9]*) rm -f -- "$snapshot"; return 1 ;; esac
-    [ "${#current}" -le 17 ] || { rm -f -- "$snapshot"; return 1; }
+    [ -f "$counter" ] && [ ! -L "$counter" ] || { rm -f -- "$snapshot" "$restrictions"; return 1; }
+    IFS= read -r current < "$counter" || { rm -f -- "$snapshot" "$restrictions"; return 1; }
+    case "$current" in ''|*[!0-9]*) rm -f -- "$snapshot" "$restrictions"; return 1 ;; esac
+    [ "${#current}" -le 17 ] || { rm -f -- "$snapshot" "$restrictions"; return 1; }
   fi
   generation=$((current + 1))
   counter_tmp=$(umask 077; mktemp "$STATE/.remote-handoff-generation.XXXXXX") \
-    || { rm -f -- "$snapshot"; return 1; }
+    || { rm -f -- "$snapshot" "$restrictions"; return 1; }
   printf '%s\n' "$generation" > "$counter_tmp" \
-    || { rm -f -- "$snapshot" "$counter_tmp"; return 1; }
+    || { rm -f -- "$snapshot" "$restrictions" "$counter_tmp"; return 1; }
   chmod 600 "$counter_tmp" \
-    || { rm -f -- "$snapshot" "$counter_tmp"; return 1; }
+    || { rm -f -- "$snapshot" "$restrictions" "$counter_tmp"; return 1; }
   mv -f -- "$counter_tmp" "$counter" \
-    || { rm -f -- "$snapshot" "$counter_tmp"; return 1; }
+    || { rm -f -- "$snapshot" "$restrictions" "$counter_tmp"; return 1; }
   remote_rel="state/handoff/$id.outbox.md"
   if ! "$SCRIPT_DIR/fm-on.sh" "$id" fm-remote-file.sh put "$remote_rel" 1048576 \
     "$bytes" "$hash" "$generation" < "$snapshot"; then
-    rm -f -- "$snapshot"
+    rm -f -- "$snapshot" "$restrictions"
     echo "error: handoff transfer to $id was unavailable or completion is unknown; outbox preserved at $outbox" >&2
     return 1
   fi
   rm -f -- "$snapshot"
   if ! receive_out=$("$SCRIPT_DIR/fm-on.sh" "$id" fm-backlog-receive.sh \
-    "$remote_rel" "$bytes" "$hash" "$generation" < /dev/null 2>&1); then
+    "$remote_rel" "$bytes" "$hash" "$generation" < "$restrictions" 2>&1); then
+    rm -f -- "$restrictions"
     [ -z "$receive_out" ] || printf '%s\n' "$receive_out" >&2
     echo "error: handoff receipt by $id was unavailable or completion is unknown; outbox preserved at $outbox" >&2
     return 1
   fi
+  rm -f -- "$restrictions"
   rm -f -- "$outbox" || {
     echo "error: remote receipt was confirmed but local outbox cleanup failed: $outbox" >&2
     return 1
@@ -463,6 +559,7 @@ REMOTE=$(secondmate_registry_field "$REG" "$ID" remote 2>/dev/null || true)
 if [ "$REMOTE" = 1 ]; then
   ACTIVE_HANDOFF_LOCK="$STATE/.backlog-handoff-$ID.lock"
   fm_lock_acquire_wait "$ACTIVE_HANDOFF_LOCK"
+  acquire_task_locks "$STATE" "$@" || exit 1
   if remote_handoff "$ID" "$@"; then rc=0; else rc=$?; fi
   release_remote_locks
   exit "$rc"
@@ -475,6 +572,8 @@ SUB_HOME=$(validate_secondmate_home "$ID" "$RAW_HOME") || exit 1
 SUB_BACKLOG="$SUB_HOME/data/backlog.md"
 validate_backlog_file "main backlog" "$MAIN_BACKLOG" || exit 1
 validate_backlog_file "secondmate backlog" "$SUB_BACKLOG" || exit 1
+acquire_task_locks "$STATE" "$@" || exit 1
+acquire_task_locks "$SUB_HOME/state" "$@" || exit 1
 
 # Classify every key before changing anything: move-from-main, already-in-sub, or
 # missing. Abort with no changes if any key matches neither backlog.
@@ -525,6 +624,8 @@ if [ "${#TO_MOVE[@]}" -eq 0 ]; then
   echo "nothing to move: ${ALREADY[*]:-no keys} already present in $SUB_BACKLOG"
   exit 0
 fi
+
+copy_local_restrictions "$SUB_HOME/data" "${TO_MOVE[@]}" || exit 1
 
 FAILED=0
 for key in "${TO_MOVE[@]}"; do
