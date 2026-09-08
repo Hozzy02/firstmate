@@ -552,8 +552,11 @@ test_dispatch_restriction_moves_with_item() {
 EOF
   FM_HOME="$home" "$ROOT/bin/fm-dispatch-restrict.sh" set restricted-item \
     --reason "captain hold" --by captain >/dev/null || fail "fixture restriction failed"
+  FM_HOME="$sub" "$ROOT/bin/fm-dispatch-restrict.sh" set restricted-item \
+    --reason "older destination hold" --by captain >/dev/null || fail "destination overwrite fixture failed"
   FM_HOME="$sub" "$ROOT/bin/fm-dispatch-restrict.sh" set lifted-item \
-    --reason "obsolete hold" --by captain >/dev/null || fail "destination fixture restriction failed"
+    --reason "destination hold" --by captain >/dev/null || fail "destination fixture restriction failed"
+  cp "$sub/data/dispatch-restrictions/lifted-item" "$home/lifted-item.expected"
 
   FM_HOME="$home" "$ROOT/bin/fm-backlog-handoff.sh" design restricted-item lifted-item >/dev/null \
     || fail "restricted item handoff failed"
@@ -563,9 +566,9 @@ EOF
   cmp -s "$home/data/dispatch-restrictions/restricted-item" \
     "$sub/data/dispatch-restrictions/restricted-item" \
     || fail "handoff changed the dispatch restriction record"
-  assert_absent "$sub/data/dispatch-restrictions/lifted-item" \
-    "handoff did not preserve the source home's lifted restriction state"
-  pass "local handoff carries set and lifted dispatch restriction state"
+  cmp -s "$home/lifted-item.expected" "$sub/data/dispatch-restrictions/lifted-item" \
+    || fail "handoff implicitly lifted or changed a destination restriction"
+  pass "local handoff copies present restrictions without implicit lifts"
 }
 
 test_body_moves_when_followed_by_another_item

@@ -300,13 +300,6 @@ copy_local_restrictions() { # <destination-data> <keys...>
     source="$DATA/dispatch-restrictions/$key"
     destination="$dir/$key"
     if [ ! -e "$source" ] && [ ! -L "$source" ]; then
-      if [ -e "$destination" ] || [ -L "$destination" ]; then
-        [ -f "$destination" ] && [ ! -L "$destination" ] || {
-          echo "error: destination dispatch restriction for $key is unsafe" >&2
-          return 1
-        }
-        rm -f -- "$destination" || return 1
-      fi
       continue
     fi
     [ -f "$source" ] && [ ! -L "$source" ] || {
@@ -316,11 +309,10 @@ copy_local_restrictions() { # <destination-data> <keys...>
     mkdir -p "$dir" || return 1
     [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
     if [ -e "$destination" ] || [ -L "$destination" ]; then
-      if [ ! -f "$destination" ] || [ -L "$destination" ] || ! cmp -s "$source" "$destination"; then
-        echo "error: destination dispatch restriction for $key is unsafe or conflicting" >&2
+      if [ ! -f "$destination" ] || [ -L "$destination" ]; then
+        echo "error: destination dispatch restriction for $key is unsafe" >&2
         return 1
       fi
-      continue
     fi
     tmp=$(umask 077; mktemp "$dir/.restriction.XXXXXX") || return 1
     if ! cp -p -- "$source" "$tmp" || ! mv -f -- "$tmp" "$destination"; then
@@ -339,6 +331,21 @@ list_keys() { # <file>
   ' "$1"
 }
 
+# Every key the outbox already carries is part of the next delivery, so its
+# restriction is read and shipped by remote_deliver_outbox even when this
+# invocation did not name it. Both entry points therefore lock the requested
+# keys and the recovered outbox keys as ONE sorted batch, which keeps the
+# restriction gate closed for recovered keys without an out-of-order acquire.
+OUTBOX_KEYS=("")
+collect_outbox_keys() { # <outbox-path>
+  local outbox=$1 key
+  OUTBOX_KEYS=("")
+  [ -f "$outbox" ] && [ ! -L "$outbox" ] || return 0
+  while IFS= read -r key; do
+    OUTBOX_KEYS+=("$key")
+  done < <(list_keys "$outbox")
+}
+
 build_remote_restriction_payload() { # <outbox> <payload>
   local outbox=$1 payload=$2 key source encoded
   printf 'FM-DISPATCH-RESTRICTIONS 1\n' > "$payload" || return 1
@@ -346,16 +353,19 @@ build_remote_restriction_payload() { # <outbox> <payload>
     fm_task_id_path_safe "$key" || continue
     source="$DATA/dispatch-restrictions/$key"
     if [ ! -e "$source" ] && [ ! -L "$source" ]; then
-      printf 'absent\t%s\n' "$key" >> "$payload" || return 1
       continue
     fi
     [ -f "$source" ] && [ ! -L "$source" ] || {
       echo "error: dispatch restriction for $key is unsafe: $source" >&2
       return 1
     }
-    encoded=$(perl -MMIME::Base64=encode_base64 -0777 -ne 'print encode_base64($_, "")' "$source") || return 1
+    encoded=$(base64 < "$source" | tr -d '\n') || return 1
     printf 'present\t%s\t%s\n' "$key" "$encoded" >> "$payload" || return 1
   done < <(list_keys "$outbox")
+  # Only present records are sent, so a short read is otherwise indistinguishable
+  # from "nothing is restricted". The terminator makes the receiver refuse a
+  # truncated payload instead of delivering a restricted task unrestricted.
+  printf 'FM-DISPATCH-RESTRICTIONS-END\n' >> "$payload" || return 1
 }
 
 remote_deliver_outbox() { # <secondmate-id> <outbox-path>
@@ -533,6 +543,8 @@ resume_remote_outbox() { # <secondmate-id> <outbox-path>
     echo "error: unsafe pending handoff outbox: $outbox" >&2
     return 1
   fi
+  collect_outbox_keys "$outbox"
+  acquire_task_locks "$STATE" "${OUTBOX_KEYS[@]}" || return 1
   remote_deliver_outbox "$id" "$outbox"
 }
 
@@ -559,7 +571,8 @@ REMOTE=$(secondmate_registry_field "$REG" "$ID" remote 2>/dev/null || true)
 if [ "$REMOTE" = 1 ]; then
   ACTIVE_HANDOFF_LOCK="$STATE/.backlog-handoff-$ID.lock"
   fm_lock_acquire_wait "$ACTIVE_HANDOFF_LOCK"
-  acquire_task_locks "$STATE" "$@" || exit 1
+  collect_outbox_keys "$DATA/handoff/$ID.outbox.md"
+  acquire_task_locks "$STATE" "$@" "${OUTBOX_KEYS[@]}" || exit 1
   if remote_handoff "$ID" "$@"; then rc=0; else rc=$?; fi
   release_remote_locks
   exit "$rc"

@@ -11,6 +11,12 @@
 # `tasks-axi mv` transaction under tasks-axi's own locks. On an ambiguous caller
 # retry, destination-present classification makes this operation idempotent.
 #
+# The dispatch-restriction payload on stdin is `FM-DISPATCH-RESTRICTIONS 1`, then
+# one `present\t<task-id>\t<base64 record>` line per RESTRICTED delivered id, then
+# `FM-DISPATCH-RESTRICTIONS-END`. Absent ids are simply not listed, so a handoff
+# never lifts a restriction this home already holds; the terminator is what
+# distinguishes "not restricted" from a truncated payload.
+#
 # If tasks-axi reports a lock failure, this host may remove and retry once only
 # for its own backlog or delivered lock whose pid is dead and whose mtime is at
 # least 30 seconds old. No live or uncertain lock is touched. On confirmed
@@ -29,9 +35,20 @@ LOCK_STALE_SECS=30
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 sha256_file() {
   if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'; else sha256sum "$1" | awk '{print $1}'; fi
+}
+
+base64_decode_to() { # <encoded> <destination>
+  local encoded=$1 destination=$2
+  if printf '%s' "$encoded" | base64 --decode > "$destination" 2>/dev/null; then return 0; fi
+  if printf '%s' "$encoded" | base64 -D > "$destination" 2>/dev/null; then return 0; fi
+  return 1
+}
+
+base64_encode_file() { # <file>
+  base64 < "$1" | tr -d '\n'
 }
 
 backlog_key_section() { # <file> <key>
@@ -167,33 +184,33 @@ done
 
 IFS= read -r RESTRICTION_HEADER || die "dispatch restriction payload is missing"
 [ "$RESTRICTION_HEADER" = 'FM-DISPATCH-RESTRICTIONS 1' ] || die "dispatch restriction payload is malformed"
+RESTRICTIONS_TERMINATED=0
 while IFS=$'\t' read -r presence key encoded extra; do
   [ -n "$presence$key$encoded$extra" ] || continue
-  case "$presence" in
-    present) [ -n "$encoded" ] && [ -z "$extra" ] || die "dispatch restriction payload is malformed" ;;
-    absent) [ -z "$encoded$extra" ] || die "dispatch restriction payload is malformed" ;;
-    *) die "dispatch restriction payload is malformed" ;;
-  esac
+  [ "$RESTRICTIONS_TERMINATED" -eq 0 ] || die "dispatch restriction payload continues past its terminator"
+  if [ "$presence" = 'FM-DISPATCH-RESTRICTIONS-END' ]; then
+    [ -z "$key$encoded$extra" ] || die "dispatch restriction payload is malformed"
+    RESTRICTIONS_TERMINATED=1
+    continue
+  fi
+  [ "$presence" = present ] && [ -n "$encoded" ] && [ -z "$extra" ] \
+    || die "dispatch restriction payload is malformed"
   case "$key" in ''|.*|*[!A-Za-z0-9._-]*) die "dispatch restriction payload has an unsafe task id" ;; esac
   backlog_key_section "$DELIVERED" "$key" >/dev/null 2>&1 \
     || die "dispatch restriction payload names an item outside the delivered outbox"
-  [ ! -e "$RESTRICTION_STAGE/$key.present" ] && [ ! -e "$RESTRICTION_STAGE/$key.absent" ] \
+  [ ! -e "$RESTRICTION_STAGE/$key.present" ] \
     || die "dispatch restriction payload repeats task $key"
-  if [ "$presence" = absent ]; then
-    : > "$RESTRICTION_STAGE/$key.absent"
-    continue
-  fi
   case "$encoded" in ''|*[!A-Za-z0-9+/=]*) die "dispatch restriction payload encoding is malformed" ;; esac
-  perl -MMIME::Base64=decode_base64 -e 'print decode_base64($ARGV[0])' "$encoded" \
-    > "$RESTRICTION_STAGE/$key.present" || die "dispatch restriction payload could not be decoded"
-  normalized=$(perl -MMIME::Base64=encode_base64 -0777 -ne 'print encode_base64($_, "")' "$RESTRICTION_STAGE/$key.present") \
+  base64_decode_to "$encoded" "$RESTRICTION_STAGE/$key.present" \
+    || die "dispatch restriction payload could not be decoded"
+  normalized=$(base64_encode_file "$RESTRICTION_STAGE/$key.present") \
     || die "dispatch restriction payload could not be verified"
   [ "$normalized" = "$encoded" ] || die "dispatch restriction payload encoding is malformed"
 done
-for key in "${KEYS[@]}"; do
-  [ -e "$RESTRICTION_STAGE/$key.present" ] || [ -e "$RESTRICTION_STAGE/$key.absent" ] \
-    || die "dispatch restriction payload omits task $key"
-done
+# The payload carries only present records, so an absent record and a lost
+# record look identical. Requiring the sender's terminator is what proves the
+# whole restriction set arrived before any delivered item becomes dispatchable.
+[ "$RESTRICTIONS_TERMINATED" -eq 1 ] || die "dispatch restriction payload is truncated"
 
 mkdir -p "$FM_HOME/data"
 [ -d "$FM_HOME/data" ] && [ ! -L "$FM_HOME/data" ] || die "destination data directory is unsafe"
@@ -207,19 +224,10 @@ if find "$RESTRICTION_STAGE" -type f -print -quit | grep -q .; then
     name=$(basename "$staged")
     key=${name%.*}
     destination="$RESTRICTION_DEST/$key"
-    if [ "${name##*.}" = absent ]; then
-      if [ -e "$destination" ] || [ -L "$destination" ]; then
-        [ -f "$destination" ] && [ ! -L "$destination" ] \
-          || die "destination dispatch restriction for $key is unsafe"
-        rm -f -- "$destination" || die "cannot lift destination dispatch restriction for $key"
-      fi
-      continue
-    fi
     if [ -e "$destination" ] || [ -L "$destination" ]; then
-      if [ ! -f "$destination" ] || [ -L "$destination" ] || ! cmp -s "$staged" "$destination"; then
-        die "destination dispatch restriction for $key is unsafe or conflicting"
+      if [ ! -f "$destination" ] || [ -L "$destination" ]; then
+        die "destination dispatch restriction for $key is unsafe"
       fi
-      continue
     fi
     tmp=$(umask 077; mktemp "$RESTRICTION_DEST/.restriction.XXXXXX") \
       || die "cannot stage destination dispatch restriction for $key"
