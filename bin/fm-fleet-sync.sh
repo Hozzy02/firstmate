@@ -13,8 +13,9 @@
 # stashed, or discarded.
 # Still skips (benignly) local-only/no-origin projects, missing remotes/branches,
 # and fetch failures.
-# Every report, including "already current", describes the moment this run's
-# fetch completed, not a standing guarantee for the rest of the session.
+# Successful clone freshness results ("already current", "synced", or
+# re-attached-branch "recovered") describe the moment this run's fetch completed,
+# not a standing guarantee for the rest of the session.
 # A long session can outlive that moment, because project remotes keep advancing,
 # including from this fleet's own merges.
 # A clean report going stale later is expected, not a sync defect.
