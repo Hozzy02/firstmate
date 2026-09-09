@@ -120,6 +120,46 @@ test_set_list_lift_roundtrip() {
   pass "fm-dispatch-restrict.sh set/list/lift round-trip cleanly"
 }
 
+# `list` is the captain's audit surface, so a write killed before its rename must
+# not be able to appear there as a restricted id. Staging is dot-prefixed for
+# exactly that reason, and its leftover parses as a complete record otherwise.
+test_list_ignores_an_interrupted_write() {
+  local home out dir
+  home=$(new_home list-interrupted-write)
+
+  out=$(run_restrict "$home" set nope-crash-c3 --reason "real hold" --by captain) \
+    || fail "set should succeed: $out"
+  dir="$home/data/dispatch-restrictions"
+  printf 'by=captain\nat=2026-09-08T00:00:00Z\nreason=abandoned write\n' \
+    > "$dir/.restriction.abcdef"
+
+  out=$(run_restrict "$home" list) || fail "list should succeed: $out"
+  assert_contains "$out" 'nope-crash-c3' "list dropped a genuinely restricted id"
+  assert_not_contains "$out" 'abandoned write' \
+    "list reported an interrupted write's staging file as an active restriction"
+  assert_not_contains "$out" 'restriction' \
+    "list surfaced a staging file name as a restricted task id"
+  pass "fm-dispatch-restrict.sh list ignores an interrupted write's staging file"
+}
+
+# The record is per home and neither subcommand reads a backlog, so the only
+# safeguard against restricting the wrong home is that both name the home.
+test_set_and_lift_name_the_home_they_acted_on() {
+  local home out
+  home=$(new_home names-home)
+
+  out=$(run_restrict "$home" set nope-home-d4 --reason "keep queued" --by captain) \
+    || fail "set should succeed: $out"
+  assert_contains "$out" "in $home" "set did not name the home its record landed in"
+
+  out=$(run_restrict "$home" lift nope-home-d4) || fail "lift should succeed: $out"
+  assert_contains "$out" "in $home" "lift did not name the home it acted on"
+
+  out=$(run_restrict "$home" lift nope-home-d4)
+  assert_contains "$out" "in $home" "the nothing-to-lift refusal did not name the home checked"
+  pass "fm-dispatch-restrict.sh set and lift name the home they acted on"
+}
+
 test_spawn_refuses_restricted_ship_and_scout() {
   local home out status
   home=$(new_home spawn-refuse)
@@ -214,6 +254,8 @@ test_spawn_secondmate_id_namespace_is_exempt() {
 
 test_set_requires_reason_and_by
 test_set_list_lift_roundtrip
+test_list_ignores_an_interrupted_write
+test_set_and_lift_name_the_home_they_acted_on
 test_spawn_refuses_restricted_ship_and_scout
 test_spawn_unaffected_when_unrestricted
 test_spawn_proceeds_after_lift

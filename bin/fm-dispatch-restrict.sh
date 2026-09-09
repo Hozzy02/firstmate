@@ -21,12 +21,18 @@
 # for the storage contract and bin/fm-spawn.sh for the enforcement gate).
 #
 # Operates on the CURRENT home ($FM_HOME / the FM_*_OVERRIDE vars, exactly
-# like every other bin/fm-*.sh script), so it reaches whichever home will
-# actually dispatch the task: run it directly (optionally with an explicit
-# FM_HOME=<secondmate-home>) for a LOCAL secondmate, or through
+# like every other bin/fm-*.sh script): run it directly (optionally with an
+# explicit FM_HOME=<secondmate-home>) for a LOCAL secondmate, or through
 # `bin/fm-on.sh <secondmate-id> fm-dispatch-restrict.sh ...` for a REMOTE
 # one - fm-on.sh already runs any bin/fm-*.sh script in a remote secondmate's
 # home, so this needs no new cross-home channel of its own.
+#
+# The record is therefore PER HOME, and each home's bin/fm-spawn.sh consults
+# only its own. Neither `set` nor `lift` reads any backlog, so neither can tell
+# you that you aimed at the wrong home; point them at the home that OWNS the
+# item. Both name the home they acted on so the confirmation is unambiguous.
+# bin/fm-backlog-handoff.sh carries an existing record with the item when
+# ownership moves, and the source home keeps its own copy on purpose.
 set -u
 
 usage() {
@@ -96,7 +102,7 @@ case "$CMD" in
     AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
     if fm_dispatch_restrict_write "$DATA" "$ID" "$BY" "$AT" "$REASON"; then
       release_restrict_lock
-      printf 'restricted %s (by=%s at=%s reason=%s)\n' "$ID" "$BY" "$AT" "$REASON"
+      printf 'restricted %s in %s (by=%s at=%s reason=%s)\n' "$ID" "$FM_HOME" "$BY" "$AT" "$REASON"
       exit 0
     fi
     release_restrict_lock
@@ -114,7 +120,7 @@ case "$CMD" in
     if fm_dispatch_restrict_active "$DATA" "$ID"; then
       if fm_dispatch_restrict_lift "$DATA" "$ID"; then
         release_restrict_lock
-        printf 'lifted %s\n' "$ID"
+        printf 'lifted %s in %s\n' "$ID" "$FM_HOME"
         exit 0
       fi
       release_restrict_lock
@@ -122,7 +128,7 @@ case "$CMD" in
       exit 1
     fi
     release_restrict_lock
-    echo "error: $ID is not currently restricted; nothing to lift" >&2
+    echo "error: $ID is not currently restricted in $FM_HOME; nothing to lift" >&2
     exit 1
     ;;
 esac

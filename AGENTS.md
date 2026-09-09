@@ -486,6 +486,9 @@ When a main-side thread such as a pending captain decision or relay reminder is 
 Unresolved decisions discovered by investigations or visual reviews follow `decision-hold-lifecycle`, which owns their mandatory backlog lifecycle.
 A `tasks-axi hold` is not durable enough for a captain's "keep this queued, never dispatch" instruction: completing any related task clears it.
 For that instruction, use `bin/fm-dispatch-restrict.sh set` instead; `bin/fm-spawn.sh` then refuses a ship or scout spawn for that task id until an explicit `bin/fm-dispatch-restrict.sh lift` removes it, independent of the backlog backend and of task completion, teardown, or re-queueing (see the script's own header for exact usage).
+The record is PER HOME and each home's `bin/fm-spawn.sh` enforces only its own: `set` and `lift` write the home they run in, name that home back to you, and never consult any backlog, so a success line is not evidence that the home which will actually dispatch the item is now covered.
+Restrict the home that owns the item: the main backlog's items in this home, and an item already routed to a secondmate through `bin/fm-on.sh <id> fm-dispatch-restrict.sh set ...` for a remote one or with an explicit `FM_HOME=<secondmate-home>` for a local one.
+`bin/fm-backlog-handoff.sh` carries an existing record along when it moves an item, so restricting before a handoff needs nothing further, and the source home deliberately keeps its own copy afterwards - lifting there does not lift the destination's.
 Update the backlog on every dispatch, completion, and decision for a work item.
 Re-evaluate queued work after every teardown and heartbeat, dispatching items only when dependencies and time gates have cleared.
 

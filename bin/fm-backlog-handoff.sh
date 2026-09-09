@@ -24,7 +24,14 @@
 #     archiving;
 #   - the multi-key classification and idempotent per-key reporting: a key
 #     already present in the secondmate backlog is reported and skipped, and if
-#     any key matches neither backlog nothing is moved.
+#     any key matches neither backlog nothing is moved;
+#   - carrying each handed-off id's dispatch restriction record
+#     (bin/fm-dispatch-restrict-lib.sh) into the destination home, so a restricted
+#     item cannot become dispatchable there just by changing owner. A skipped
+#     already-present key still gets its restriction carried, which is what makes
+#     a converge re-run fix a home that predates the restriction. A record only
+#     ever lands or is overwritten; a handoff never removes one, because only an
+#     explicit `bin/fm-dispatch-restrict.sh lift` does that.
 #
 # What `tasks-axi mv <id>... --to <dest>` owns: moving each full item BLOCK
 # byte-exact (header, body lines, blank separators, and indented pseudo-headings
@@ -225,34 +232,9 @@ validate_backlog_file() {
   fi
 }
 
-# Classify a single key by the section it lives under (## In flight /
-# ## Queued / ## Done), or return non-zero if no `- [ ] <key>` / `- [x] <key>`
-# header exists in the file. This reads only section headings and item header
-# lines - never item bodies - so it drives the fleet-level classification (in-
-# flight refusal, already-present idempotency, missing-key abort) without
-# re-implementing the block/body move semantics that tasks-axi mv owns.
-backlog_key_section() {
-  local file=$1 key=$2
-  [ -f "$file" ] || return 1
-  awk -v key="$key" '
-    BEGIN { section = "## Queued" }
-    /^##[[:space:]]+/ {
-      section = $0
-      sub(/^##[[:space:]]+/, "## ", section)
-      sub(/[[:space:]]+$/, "", section)
-      next
-    }
-    /^- \[[ x]\] / {
-      rest = $0
-      sub(/^- \[[ x]\] +/, "", rest)
-      id = rest
-      sub(/[ \t].*/, "", id)
-      if (id == key) { print section; found = 1; exit }
-    }
-    END { exit found ? 0 : 1 }
-  ' "$file"
-}
-
+# Item-body probe used only to refuse a selected item whose continuation lines
+# tasks-axi would not carry. The section and key readers this classification also
+# needs live in bin/fm-tasks-axi-lib.sh, so both ends of a handoff share one copy.
 backlog_key_noncanonical_body_lines() {
   local file=$1 key=$2
   awk -v key="$key" '
@@ -322,15 +304,6 @@ copy_local_restrictions() { # <destination-data> <keys...>
   done
 }
 
-list_keys() { # <file>
-  awk '
-    /^- \[[ x]\] / {
-      rest=$0; sub(/^- \[[ x]\] +/, "", rest); id=rest; sub(/[ \t].*/, "", id)
-      if (id != "" && !seen[id]++) print id
-    }
-  ' "$1"
-}
-
 # Every key the outbox already carries is part of the next delivery, so its
 # restriction is read and shipped by remote_deliver_outbox even when this
 # invocation did not name it. Both entry points therefore lock the requested
@@ -343,7 +316,7 @@ collect_outbox_keys() { # <outbox-path>
   [ -f "$outbox" ] && [ ! -L "$outbox" ] || return 0
   while IFS= read -r key; do
     OUTBOX_KEYS+=("$key")
-  done < <(list_keys "$outbox")
+  done < <(fm_backlog_list_keys "$outbox")
 }
 
 build_remote_restriction_payload() { # <outbox> <payload>
@@ -361,7 +334,7 @@ build_remote_restriction_payload() { # <outbox> <payload>
     }
     encoded=$(base64 < "$source" | tr -d '\n') || return 1
     printf 'present\t%s\t%s\n' "$key" "$encoded" >> "$payload" || return 1
-  done < <(list_keys "$outbox")
+  done < <(fm_backlog_list_keys "$outbox")
   # Only present records are sent, so a short read is otherwise indistinguishable
   # from "nothing is restricted". The terminator makes the receiver refuse a
   # truncated payload instead of delivering a restricted task unrestricted.
@@ -434,8 +407,8 @@ remove_interrupted_source_duplicates() { # <outbox> <keys...>
     remaining=0
     progress=0
     for key in "$@"; do
-      backlog_key_section "$outbox" "$key" >/dev/null 2>&1 || continue
-      if backlog_key_section "$MAIN_BACKLOG" "$key" >/dev/null 2>&1; then
+      fm_backlog_key_section "$outbox" "$key" >/dev/null 2>&1 || continue
+      if fm_backlog_key_section "$MAIN_BACKLOG" "$key" >/dev/null 2>&1; then
         remaining=$((remaining + 1))
         if tasks-axi rm "$key" --file "$MAIN_BACKLOG" >/dev/null 2>&1; then
           progress=$((progress + 1))
@@ -471,8 +444,8 @@ remote_handoff() { # <secondmate-id> <keys...>
   done_items=()
   not_queued=()
   for key in "${requested[@]}"; do
-    out_section=$(backlog_key_section "$outbox" "$key" 2>/dev/null || true)
-    main_section=$(backlog_key_section "$MAIN_BACKLOG" "$key" 2>/dev/null || true)
+    out_section=$(fm_backlog_key_section "$outbox" "$key" 2>/dev/null || true)
+    main_section=$(fm_backlog_key_section "$MAIN_BACKLOG" "$key" 2>/dev/null || true)
     if [ -n "$out_section" ]; then
       [ "$out_section" = '## Queued' ] || not_queued+=("$key")
       already+=("$key")
@@ -597,9 +570,9 @@ IN_FLIGHT=()
 DONE=()
 NOT_QUEUED=()
 for key in "$@"; do
-  if backlog_key_section "$SUB_BACKLOG" "$key" >/dev/null; then
+  if fm_backlog_key_section "$SUB_BACKLOG" "$key" >/dev/null; then
     ALREADY+=("$key")
-  elif section=$(backlog_key_section "$MAIN_BACKLOG" "$key"); then
+  elif section=$(fm_backlog_key_section "$MAIN_BACKLOG" "$key"); then
     case "$section" in
       "## Queued") TO_MOVE+=("$key") ;;
       "## In flight") IN_FLIGHT+=("$key") ;;
@@ -633,12 +606,12 @@ if [ "$FAILED" -ne 0 ]; then
   exit 1
 fi
 
+copy_local_restrictions "$SUB_HOME/data" "$@" || exit 1
+
 if [ "${#TO_MOVE[@]}" -eq 0 ]; then
   echo "nothing to move: ${ALREADY[*]:-no keys} already present in $SUB_BACKLOG"
   exit 0
 fi
-
-copy_local_restrictions "$SUB_HOME/data" "${TO_MOVE[@]}" || exit 1
 
 FAILED=0
 for key in "${TO_MOVE[@]}"; do

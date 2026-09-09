@@ -51,27 +51,6 @@ base64_encode_file() { # <file>
   base64 < "$1" | tr -d '\n'
 }
 
-backlog_key_section() { # <file> <key>
-  awk -v key="$2" '
-    BEGIN { section = "## Queued" }
-    /^##[[:space:]]+/ { section=$0; sub(/^##[[:space:]]+/, "## ", section); sub(/[[:space:]]+$/, "", section); next }
-    /^- \[[ x]\] / {
-      rest=$0; sub(/^- \[[ x]\] +/, "", rest); id=rest; sub(/[ \t].*/, "", id)
-      if (id == key) { print section; found=1; exit }
-    }
-    END { exit found ? 0 : 1 }
-  ' "$1"
-}
-
-list_keys() { # <file>
-  awk '
-    /^- \[[ x]\] / {
-      rest=$0; sub(/^- \[[ x]\] +/, "", rest); id=rest; sub(/[ \t].*/, "", id)
-      if (id != "" && !seen[id]++) print id
-    }
-  ' "$1"
-}
-
 lock_age() {
   local modified now
   if [ "$(uname 2>/dev/null)" = Darwin ]; then
@@ -170,7 +149,7 @@ if [ -e "$DEST" ] && [ ! -f "$DEST" ]; then die "destination backlog is not a re
 KEYS=()
 while IFS= read -r key; do
   [ -n "$key" ] && KEYS+=("$key")
-done < <(list_keys "$DELIVERED")
+done < <(fm_backlog_list_keys "$DELIVERED")
 while IFS= read -r key; do
   case "$key" in ''|.*|*[!A-Za-z0-9._-]*) die "delivered outbox has an unsafe task id" ;; esac
   task_lock="$FM_HOME/state/.spawn-$key.lock"
@@ -178,7 +157,7 @@ while IFS= read -r key; do
   ACTIVE_TASK_LOCKS+=("$task_lock")
 done < <(printf '%s\n' "${KEYS[@]}" | LC_ALL=C sort -u)
 for key in "${KEYS[@]}"; do
-  section=$(backlog_key_section "$DELIVERED" "$key") || die "delivered key disappeared during classification: $key"
+  section=$(fm_backlog_key_section "$DELIVERED" "$key") || die "delivered key disappeared during classification: $key"
   [ "$section" = '## Queued' ] || die "delivered outbox contains non-Queued item $key under $section"
 done
 
@@ -196,7 +175,7 @@ while IFS=$'\t' read -r presence key encoded extra; do
   [ "$presence" = present ] && [ -n "$encoded" ] && [ -z "$extra" ] \
     || die "dispatch restriction payload is malformed"
   case "$key" in ''|.*|*[!A-Za-z0-9._-]*) die "dispatch restriction payload has an unsafe task id" ;; esac
-  backlog_key_section "$DELIVERED" "$key" >/dev/null 2>&1 \
+  fm_backlog_key_section "$DELIVERED" "$key" >/dev/null 2>&1 \
     || die "dispatch restriction payload names an item outside the delivered outbox"
   [ ! -e "$RESTRICTION_STAGE/$key.present" ] \
     || die "dispatch restriction payload repeats task $key"
@@ -245,7 +224,7 @@ fi
 TO_MOVE=()
 ALREADY=()
 for key in "${KEYS[@]}"; do
-  if backlog_key_section "$DEST" "$key" >/dev/null 2>&1; then
+  if fm_backlog_key_section "$DEST" "$key" >/dev/null 2>&1; then
     ALREADY+=("$key")
   else
     TO_MOVE+=("$key")
@@ -268,7 +247,7 @@ if [ "${#TO_MOVE[@]}" -gt 0 ]; then
 fi
 
 for key in "${KEYS[@]}"; do
-  backlog_key_section "$DEST" "$key" >/dev/null 2>&1 \
+  fm_backlog_key_section "$DEST" "$key" >/dev/null 2>&1 \
     || die "receipt verification failed for $key; delivered outbox is preserved"
 done
 rm -f -- "$DELIVERED" || die "receipt succeeded but delivered scratch cleanup failed"

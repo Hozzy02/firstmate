@@ -571,6 +571,54 @@ EOF
   pass "local handoff copies present restrictions without implicit lifts"
 }
 
+# A home seeded before the restriction existed (or by an interrupted run) already
+# holds the item, so nothing is left to move. The converge re-run the header
+# promises must still carry the restriction, or that home stays able to spawn it.
+test_dispatch_restriction_converges_for_already_present_key() {
+  local home="$TMP_ROOT/restriction-converge-main"
+  local sub="$TMP_ROOT/restriction-converge-sub"
+  setup_homes "$home" "$sub"
+  cat > "$home/data/backlog.md" <<'EOF'
+## Queued
+- [ ] moves-now - moves on this run (repo: alpha)
+
+## Done
+EOF
+  cat > "$sub/data/backlog.md" <<'EOF'
+## Queued
+- [ ] landed-earlier - already owned by the secondmate (repo: alpha)
+
+## Done
+EOF
+  FM_HOME="$home" "$ROOT/bin/fm-dispatch-restrict.sh" set landed-earlier \
+    --reason "captain hold" --by captain >/dev/null || fail "fixture restriction failed"
+  FM_HOME="$home" "$ROOT/bin/fm-dispatch-restrict.sh" set moves-now \
+    --reason "captain hold" --by captain >/dev/null || fail "fixture restriction failed"
+
+  local out
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-backlog-handoff.sh" design moves-now landed-earlier 2>&1) \
+    || fail "mixed already-present handoff failed: $out"
+  assert_contains "$out" 'already present (skipped): landed-earlier' \
+    "already-present key was not reported as skipped"
+  cmp -s "$home/data/dispatch-restrictions/landed-earlier" \
+    "$sub/data/dispatch-restrictions/landed-earlier" \
+    || fail "handoff skipped the restriction for an already-present key"
+  cmp -s "$home/data/dispatch-restrictions/moves-now" \
+    "$sub/data/dispatch-restrictions/moves-now" \
+    || fail "handoff skipped the restriction for a moved key"
+
+  # Nothing left to move at all: the same convergence must still happen instead
+  # of returning early before any restriction is carried.
+  rm -f "$sub/data/dispatch-restrictions/landed-earlier"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-backlog-handoff.sh" design landed-earlier 2>&1) \
+    || fail "all-already-present handoff failed: $out"
+  assert_contains "$out" 'nothing to move' "all-already-present run did not report nothing to move"
+  cmp -s "$home/data/dispatch-restrictions/landed-earlier" \
+    "$sub/data/dispatch-restrictions/landed-earlier" \
+    || fail "handoff with nothing to move returned before carrying the restriction"
+  pass "local handoff carries restrictions for already-present keys"
+}
+
 test_body_moves_when_followed_by_another_item
 test_body_moves_when_followed_by_section_heading
 test_multi_paragraph_body_with_internal_blanks_moves_whole
@@ -583,5 +631,6 @@ test_indented_heading_is_not_section_boundary
 test_registry_home_with_pre_home_parentheses
 test_registry_home_missing_field_fails_cleanly
 test_dispatch_restriction_moves_with_item
+test_dispatch_restriction_converges_for_already_present_key
 
 echo "ALL TESTS PASSED"

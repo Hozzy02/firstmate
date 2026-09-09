@@ -60,13 +60,16 @@ fm_dispatch_restrict_write() {  # <data-dir> <task-id> <by> <at> <reason>
   dir=$(fm_dispatch_restrict_dir "$data_dir")
   mkdir -p "$dir" || return 1
   path=$(fm_dispatch_restrict_path "$data_dir" "$id")
-  tmp="$path.tmp.$$"
+  # Dot-prefixed so a write killed before the rename cannot be globbed by
+  # fm_dispatch_restrict_list and reported as an active restriction. Same
+  # convention as bin/fm-backlog-handoff.sh and bin/fm-backlog-receive.sh.
+  tmp=$(umask 077; mktemp "$dir/.restriction.XXXXXX") || return 1
   {
     printf 'by=%s\n' "$by"
     printf 'at=%s\n' "$at"
     printf 'reason=%s\n' "$reason"
   } > "$tmp" || { rm -f -- "$tmp"; return 1; }
-  mv -f -- "$tmp" "$path"
+  mv -f -- "$tmp" "$path" || { rm -f -- "$tmp"; return 1; }
 }
 
 fm_dispatch_restrict_lift() {  # <data-dir> <task-id>
