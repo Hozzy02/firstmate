@@ -62,12 +62,12 @@ run_spawn() {  # <home> <args...>
 
 run_ship_spawn() {  # <home> <id>
   local home=$1 id=$2
-  run_spawn "$home" "$id" projects/alpha --mode no-mistakes --yolo off
+  run_spawn "$home" "$id" projects/alpha --harness codex --mode no-mistakes --yolo off
 }
 
 run_scout_spawn() {  # <home> <id>
   local home=$1 id=$2
-  run_spawn "$home" "$id" projects/alpha --scout
+  run_spawn "$home" "$id" projects/alpha --harness codex --scout
 }
 
 test_set_requires_reason_and_by() {
