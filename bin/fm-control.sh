@@ -38,6 +38,8 @@
 #              durable config/secondmate-harness pin (harness plus its optional
 #              model and effort tokens) exactly as any other respawn does, while
 #              a ship or scout keeps the exact adapter already recorded for it.
+#              A dispatch-restricted ship or scout is refused before its
+#              checkpoint or running agent is touched (AGENTS.md section 10).
 #              A prefixed raw-command basename cannot reconstruct its launch
 #              command, so relaunch requires an explicit --harness for it.
 #              --note is required for a ship or scout, whose replacement

@@ -197,8 +197,9 @@ bin/fm-backlog-handoff.sh <id> <item-key>...
 
 For a remote route, `tasks-axi mv` first moves the dependency-closed set atomically from the primary backlog into `data/handoff/<id>.outbox.md`.
 The outbox is then copied to the remote handoff scratch directory and `fm-backlog-receive.sh` atomically ingests every destination-absent key under the remote backlog's own lock.
+Any active dispatch restriction for an item is carried into the destination home under the same per-task serialization; [`AGENTS.md` section 10](../AGENTS.md#10-backlog-contract) owns the restriction and lift contract.
 Confirmed receipt removes the outbox.
-An existing outbox is the complete retry record, and `--resume-pending` safely re-delivers it.
+An existing outbox remains the complete backlog retry record, and `--resume-pending` safely re-delivers it with any active source-home restrictions.
 Bootstrap retries pending outboxes and emits `SECONDMATE_HANDOFF:` only when one remains.
 There is no two-phase journal and no additional tasks-axi release requirement.
 
