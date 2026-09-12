@@ -42,11 +42,31 @@ fm_dispatch_restrict_path() {  # <data-dir> <task-id>
   printf '%s/%s\n' "$(fm_dispatch_restrict_dir "$1")" "$2"
 }
 
+fm_dispatch_restrict_dir_validate() {  # <data-dir> [allow-missing]
+  local data_dir=$1 allow_missing=${2:-0} dir
+  dir=$(fm_dispatch_restrict_dir "$data_dir")
+  if [ -L "$dir" ] || { [ -e "$dir" ] && [ ! -d "$dir" ]; }; then
+    echo "error: dispatch restriction directory is not a real directory: $dir" >&2
+    return 2
+  fi
+  [ -d "$dir" ] && return 0
+  [ "$allow_missing" = 1 ] && return 1
+  echo "error: dispatch restriction directory is missing: $dir" >&2
+  return 2
+}
+
 fm_dispatch_restrict_active() {  # <data-dir> <task-id>
-  local data_dir=$1 id=$2 path
+  local data_dir=$1 id=$2 path status
   FM_DISPATCH_RESTRICT_BY=
   FM_DISPATCH_RESTRICT_AT=
   FM_DISPATCH_RESTRICT_REASON=
+  if fm_dispatch_restrict_dir_validate "$data_dir" 1; then
+    :
+  else
+    status=$?
+    [ "$status" -eq 1 ] && return 1
+    return "$status"
+  fi
   path=$(fm_dispatch_restrict_path "$data_dir" "$id")
   [ -f "$path" ] && [ ! -L "$path" ] || return 1
   FM_DISPATCH_RESTRICT_BY=$(fm_meta_get "$path" by)
@@ -56,9 +76,16 @@ fm_dispatch_restrict_active() {  # <data-dir> <task-id>
 }
 
 fm_dispatch_restrict_write() {  # <data-dir> <task-id> <by> <at> <reason>
-  local data_dir=$1 id=$2 by=$3 at=$4 reason=$5 dir path tmp
+  local data_dir=$1 id=$2 by=$3 at=$4 reason=$5 dir path tmp status
   dir=$(fm_dispatch_restrict_dir "$data_dir")
+  if fm_dispatch_restrict_dir_validate "$data_dir" 1; then
+    :
+  else
+    status=$?
+    [ "$status" -eq 1 ] || return "$status"
+  fi
   mkdir -p "$dir" || return 1
+  fm_dispatch_restrict_dir_validate "$data_dir" || return $?
   path=$(fm_dispatch_restrict_path "$data_dir" "$id")
   # Dot-prefixed so a write killed before the rename cannot be globbed by
   # fm_dispatch_restrict_list and reported as an active restriction. Same
@@ -74,15 +101,22 @@ fm_dispatch_restrict_write() {  # <data-dir> <task-id> <by> <at> <reason>
 
 fm_dispatch_restrict_lift() {  # <data-dir> <task-id>
   local data_dir=$1 id=$2 path
+  fm_dispatch_restrict_dir_validate "$data_dir" || return $?
   path=$(fm_dispatch_restrict_path "$data_dir" "$id")
   [ -e "$path" ] || [ -L "$path" ] || return 1
   rm -f -- "$path"
 }
 
 fm_dispatch_restrict_list() {  # <data-dir>
-  local data_dir=$1 dir entry id
+  local data_dir=$1 dir entry id status
   dir=$(fm_dispatch_restrict_dir "$data_dir")
-  [ -d "$dir" ] || return 0
+  if fm_dispatch_restrict_dir_validate "$data_dir" 1; then
+    :
+  else
+    status=$?
+    [ "$status" -eq 1 ] && return 0
+    return "$status"
+  fi
   for entry in "$dir"/*; do
     [ -f "$entry" ] && [ ! -L "$entry" ] || continue
     id=$(basename "$entry")

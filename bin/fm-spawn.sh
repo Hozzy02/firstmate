@@ -895,6 +895,16 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
 fi
 ID=${POS[0]}
 fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; }
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
+  if fm_dispatch_restrict_active "$DATA" "$ID"; then
+    echo "error: task $ID is under a captain dispatch restriction set by ${FM_DISPATCH_RESTRICT_BY:-unknown} on ${FM_DISPATCH_RESTRICT_AT:-an unknown date}: ${FM_DISPATCH_RESTRICT_REASON:-no reason recorded}" >&2
+    echo "error: this spawn is refused; lift it deliberately first with: bin/fm-dispatch-restrict.sh lift $ID" >&2
+    exit 1
+  else
+    restrict_status=$?
+    [ "$restrict_status" -eq 1 ] || exit "$restrict_status"
+  fi
+fi
 if [ "$RELAUNCH" -eq 1 ]; then
   SPAWN_CONTROL_LOCK="$STATE/.control-$ID.lock"
   control_owner=$(cat "$SPAWN_CONTROL_LOCK/pid" 2>/dev/null || true)
@@ -972,11 +982,15 @@ if [ "$RELAUNCH" -eq 0 ]; then
   fi
 fi
 SPAWN_TASK_LOCK="$STATE/.spawn-$ID.lock"
-if ! fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
+spawn_owner=$(cat "$SPAWN_TASK_LOCK/pid" 2>/dev/null || true)
+if [ "$RELAUNCH" -eq 1 ] && [ "$spawn_owner" = "$PPID" ] && fm_pid_alive "$spawn_owner"; then
+  :
+elif ! fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
   echo "error: another spawn is already creating task $ID" >&2
   exit 1
+else
+  SPAWN_TASK_LOCK_HELD=1
 fi
-SPAWN_TASK_LOCK_HELD=1
 PROJ=
 ARG3=
 FIRSTMATE_HOME=
@@ -1082,10 +1096,15 @@ fi
 # --secondmate <task-id> here names the secondmate's own persistent
 # identity, not a backlog task, so it is out of scope for this gate. KIND is
 # authoritative for both a fresh spawn and a --relaunch by this point.
-if [ "$KIND" != secondmate ] && fm_dispatch_restrict_active "$DATA" "$ID"; then
-  echo "error: task $ID is under a captain dispatch restriction set by ${FM_DISPATCH_RESTRICT_BY:-unknown} on ${FM_DISPATCH_RESTRICT_AT:-an unknown date}: ${FM_DISPATCH_RESTRICT_REASON:-no reason recorded}" >&2
-  echo "error: this spawn is refused; lift it deliberately first with: bin/fm-dispatch-restrict.sh lift $ID" >&2
-  exit 1
+if [ "$KIND" != secondmate ]; then
+  if fm_dispatch_restrict_active "$DATA" "$ID"; then
+    echo "error: task $ID is under a captain dispatch restriction set by ${FM_DISPATCH_RESTRICT_BY:-unknown} on ${FM_DISPATCH_RESTRICT_AT:-an unknown date}: ${FM_DISPATCH_RESTRICT_REASON:-no reason recorded}" >&2
+    echo "error: this spawn is refused; lift it deliberately first with: bin/fm-dispatch-restrict.sh lift $ID" >&2
+    exit 1
+  else
+    restrict_status=$?
+    [ "$restrict_status" -eq 1 ] || exit "$restrict_status"
+  fi
 fi
 
 shell_quote() {

@@ -190,6 +190,48 @@ test_spawn_refuses_restricted_ship_and_scout() {
   pass "fm-spawn.sh refuses a ship and a scout spawn for a restricted id"
 }
 
+test_restricted_spawn_refuses_before_state_creation() {
+  local home out status
+  home=$(new_home spawn-before-state)
+  run_restrict "$home" set nope-early-c5 --reason "keep queued" --by captain >/dev/null \
+    || fail "fixture: set restriction failed"
+  rm -rf "$home/state"
+
+  out=$(run_ship_spawn "$home" nope-early-c5)
+  status=$?
+  [ "$status" -ne 0 ] || fail "restricted spawn should refuse"
+  assert_contains "$out" 'dispatch restriction' "restricted spawn did not name the restriction"
+  if find "$home/state" -mindepth 1 -print -quit | grep -q .; then
+    fail "restricted spawn created task state or a lock before refusing"
+  fi
+  pass "fm-spawn.sh checks a restriction before creating task state or locks"
+}
+
+test_restriction_directory_symlink_is_refused() {
+  local home target out status
+  home=$(new_home symlink-directory)
+  target="$home/escaped-restrictions"
+  mkdir -p "$target"
+  printf 'by=captain\nat=2026-09-12T00:00:00Z\nreason=outside\n' > "$target/nope-link-j1"
+  ln -s "$target" "$home/data/dispatch-restrictions"
+
+  out=$(run_restrict "$home" list)
+  status=$?
+  [ "$status" -ne 0 ] || fail "list should refuse a symlink restriction directory"
+  assert_contains "$out" 'not a real directory' "list did not identify the unsafe directory"
+
+  out=$(run_restrict "$home" set nope-link-j2 --reason "unsafe" --by captain)
+  status=$?
+  [ "$status" -ne 0 ] || fail "set should refuse a symlink restriction directory"
+  assert_absent "$target/nope-link-j2" "set wrote through the restriction directory symlink"
+
+  out=$(run_restrict "$home" lift nope-link-j1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "lift should refuse a symlink restriction directory"
+  assert_present "$target/nope-link-j1" "lift removed a record through the restriction directory symlink"
+  pass "restriction operations refuse a symlink storage directory"
+}
+
 test_spawn_unaffected_when_unrestricted() {
   local home out status
   home=$(new_home spawn-unaffected)
@@ -257,6 +299,8 @@ test_set_list_lift_roundtrip
 test_list_ignores_an_interrupted_write
 test_set_and_lift_name_the_home_they_acted_on
 test_spawn_refuses_restricted_ship_and_scout
+test_restricted_spawn_refuses_before_state_creation
+test_restriction_directory_symlink_is_refused
 test_spawn_unaffected_when_unrestricted
 test_spawn_proceeds_after_lift
 test_spawn_secondmate_id_namespace_is_exempt

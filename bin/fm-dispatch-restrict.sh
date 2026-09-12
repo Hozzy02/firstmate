@@ -77,7 +77,7 @@ case "$CMD" in
   list)
     [ "$#" -eq 0 ] || { echo "error: list takes no arguments" >&2; exit 2; }
     fm_dispatch_restrict_list "$DATA"
-    exit 0
+    exit $?
     ;;
   set)
     ID=${1:-}
@@ -126,6 +126,12 @@ case "$CMD" in
       release_restrict_lock
       echo "error: could not lift dispatch restriction for $ID" >&2
       exit 1
+    else
+      restrict_status=$?
+      if [ "$restrict_status" -ne 1 ]; then
+        release_restrict_lock
+        exit "$restrict_status"
+      fi
     fi
     release_restrict_lock
     echo "error: $ID is not currently restricted in $FM_HOME; nothing to lift" >&2

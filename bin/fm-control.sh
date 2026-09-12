@@ -134,6 +134,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-dispatch-restrict-lib.sh
+. "$SCRIPT_DIR/fm-dispatch-restrict-lib.sh"
 
 POLL=${FM_CONTROL_POLL:-0.5}
 SETTLE_WAIT=${FM_CONTROL_SETTLE_WAIT:-5}
@@ -150,12 +152,18 @@ CONTROL_LOCK=
 CONTROL_LOCK_HELD=0
 RELAUNCH_ACTIVE=0
 RELAUNCH_PHASE=start
+RELAUNCH_RESTRICT_LOCK=
+RELAUNCH_RESTRICT_LOCK_HELD=0
 
 control_cleanup() {
   local status=$?
   if [ "$RELAUNCH_ACTIVE" = 1 ] \
      && declare -F relaunch_rollback >/dev/null 2>&1; then
     relaunch_rollback || true
+  fi
+  if [ "$RELAUNCH_RESTRICT_LOCK_HELD" = 1 ]; then
+    RELAUNCH_RESTRICT_LOCK_HELD=0
+    fm_lock_release "$RELAUNCH_RESTRICT_LOCK" || true
   fi
   if [ "$CONTROL_LOCK_HELD" = 1 ]; then
     CONTROL_LOCK_HELD=0
@@ -766,11 +774,23 @@ record_note() {
 }
 
 do_relaunch() {
-  local exit_result state note_line
+  local exit_result state note_line restrict_status
   local -a spawn_args
 
   require_state_verified_backend relaunch
   resolve_relaunch_profile
+
+  if [ "$KIND" != secondmate ]; then
+    RELAUNCH_RESTRICT_LOCK="$STATE/.spawn-$ID.lock"
+    fm_lock_acquire_wait "$RELAUNCH_RESTRICT_LOCK"
+    RELAUNCH_RESTRICT_LOCK_HELD=1
+    if fm_dispatch_restrict_active "$DATA" "$ID"; then
+      die "task $ID is under a captain dispatch restriction set by ${FM_DISPATCH_RESTRICT_BY:-unknown} on ${FM_DISPATCH_RESTRICT_AT:-an unknown date}: ${FM_DISPATCH_RESTRICT_REASON:-no reason recorded}; lift it deliberately first with bin/fm-dispatch-restrict.sh lift $ID"
+    else
+      restrict_status=$?
+      [ "$restrict_status" -eq 1 ] || exit "$restrict_status"
+    fi
+  fi
 
   case "$KIND" in
     ship|scout)
