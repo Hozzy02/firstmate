@@ -238,6 +238,24 @@ test_promote_requires_and_records_the_delivery_contract() {
   pass "fm-promote: promotion requires the delivery contract and records it exactly once"
 }
 
+test_promote_refuses_a_restricted_scout() {
+  local home meta out status
+  home="$TMP_ROOT/promote-restricted/home"
+  mkdir -p "$home/data/dispatch-restrictions" "$home/state"
+  meta="$home/state/promote-held-d2.meta"
+  printf 'window=fm-promote-held-d2\nkind=scout\nworktree=/tmp/wt\n' > "$meta"
+  printf 'by=captain\nat=2026-09-12T00:00:00Z\nreason=keep scouting only\n' \
+    > "$home/data/dispatch-restrictions/promote-held-d2"
+
+  out=$(FM_HOME="$home" "$PROMOTE" promote-held-d2 --mode direct-PR --yolo on 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "promotion of a restricted scout should refuse"
+  assert_contains "$out" 'promotion is refused' "promotion did not name its restriction gate"
+  assert_grep 'kind=scout' "$meta" "restricted promotion changed the task kind"
+  assert_not_contains "$(cat "$meta")" 'mode=' "restricted promotion added a delivery mode"
+  pass "fm-promote refuses to convert a restricted scout into a ship"
+}
+
 # The registry parser survives for the mechanical consumers only. It accepts the
 # conditional policy, maps it to its most rigorous leg for them, and exposes the
 # raw annotation for the one caller that must tell a policy from a flat mode.
@@ -278,5 +296,6 @@ test_spawn_refuses_a_brief_mode_mismatch
 test_spawn_notices_a_rigor_downgrade_against_the_registry
 test_scout_records_no_delivery_posture
 test_promote_requires_and_records_the_delivery_contract
+test_promote_refuses_a_restricted_scout
 test_project_mode_maps_the_conditional_policy
 echo "# all fm-task-delivery tests passed"

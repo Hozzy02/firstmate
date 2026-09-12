@@ -539,6 +539,114 @@ EOF
   pass "registry entry without (home: ...) fails cleanly with has no home"
 }
 
+test_dispatch_restriction_moves_with_item() {
+  local home="$TMP_ROOT/restriction-main"
+  local sub="$TMP_ROOT/restriction-sub"
+  setup_homes "$home" "$sub"
+  cat > "$home/data/backlog.md" <<'EOF'
+## Queued
+- [ ] restricted-item - remains restricted after handoff (repo: alpha)
+- [ ] lifted-item - remains unrestricted after handoff (repo: alpha)
+
+## Done
+EOF
+  FM_HOME="$home" "$ROOT/bin/fm-dispatch-restrict.sh" set restricted-item \
+    --reason "captain hold" --by captain >/dev/null || fail "fixture restriction failed"
+  FM_HOME="$sub" "$ROOT/bin/fm-dispatch-restrict.sh" set restricted-item \
+    --reason "older destination hold" --by captain >/dev/null || fail "destination overwrite fixture failed"
+  FM_HOME="$sub" "$ROOT/bin/fm-dispatch-restrict.sh" set lifted-item \
+    --reason "destination hold" --by captain >/dev/null || fail "destination fixture restriction failed"
+  cp "$sub/data/dispatch-restrictions/lifted-item" "$home/lifted-item.expected"
+
+  FM_HOME="$home" "$ROOT/bin/fm-backlog-handoff.sh" design restricted-item lifted-item >/dev/null \
+    || fail "restricted item handoff failed"
+
+  assert_present "$sub/data/dispatch-restrictions/restricted-item" \
+    "handoff did not copy the dispatch restriction into the destination home"
+  cmp -s "$home/data/dispatch-restrictions/restricted-item" \
+    "$sub/data/dispatch-restrictions/restricted-item" \
+    || fail "handoff changed the dispatch restriction record"
+  cmp -s "$home/lifted-item.expected" "$sub/data/dispatch-restrictions/lifted-item" \
+    || fail "handoff implicitly lifted or changed a destination restriction"
+  pass "local handoff copies present restrictions without implicit lifts"
+}
+
+# A home seeded before the restriction existed (or by an interrupted run) already
+# holds the item, so nothing is left to move. The converge re-run the header
+# promises must still carry the restriction, or that home stays able to spawn it.
+test_dispatch_restriction_converges_for_already_present_key() {
+  local home="$TMP_ROOT/restriction-converge-main"
+  local sub="$TMP_ROOT/restriction-converge-sub"
+  setup_homes "$home" "$sub"
+  cat > "$home/data/backlog.md" <<'EOF'
+## Queued
+- [ ] moves-now - moves on this run (repo: alpha)
+
+## Done
+EOF
+  cat > "$sub/data/backlog.md" <<'EOF'
+## Queued
+- [ ] landed-earlier - already owned by the secondmate (repo: alpha)
+
+## Done
+EOF
+  FM_HOME="$home" "$ROOT/bin/fm-dispatch-restrict.sh" set landed-earlier \
+    --reason "captain hold" --by captain >/dev/null || fail "fixture restriction failed"
+  FM_HOME="$home" "$ROOT/bin/fm-dispatch-restrict.sh" set moves-now \
+    --reason "captain hold" --by captain >/dev/null || fail "fixture restriction failed"
+
+  local out
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-backlog-handoff.sh" design moves-now landed-earlier 2>&1) \
+    || fail "mixed already-present handoff failed: $out"
+  assert_contains "$out" 'already present (skipped): landed-earlier' \
+    "already-present key was not reported as skipped"
+  cmp -s "$home/data/dispatch-restrictions/landed-earlier" \
+    "$sub/data/dispatch-restrictions/landed-earlier" \
+    || fail "handoff skipped the restriction for an already-present key"
+  cmp -s "$home/data/dispatch-restrictions/moves-now" \
+    "$sub/data/dispatch-restrictions/moves-now" \
+    || fail "handoff skipped the restriction for a moved key"
+
+  # Nothing left to move at all: the same convergence must still happen instead
+  # of returning early before any restriction is carried.
+  rm -f "$sub/data/dispatch-restrictions/landed-earlier"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-backlog-handoff.sh" design landed-earlier 2>&1) \
+    || fail "all-already-present handoff failed: $out"
+  assert_contains "$out" 'nothing to move' "all-already-present run did not report nothing to move"
+  cmp -s "$home/data/dispatch-restrictions/landed-earlier" \
+    "$sub/data/dispatch-restrictions/landed-earlier" \
+    || fail "handoff with nothing to move returned before carrying the restriction"
+  pass "local handoff carries restrictions for already-present keys"
+}
+
+test_dispatch_restriction_source_directory_symlink_refuses() {
+  local home="$TMP_ROOT/restriction-link-main"
+  local sub="$TMP_ROOT/restriction-link-sub"
+  local external="$TMP_ROOT/restriction-link-external"
+  local out rc=0
+  setup_homes "$home" "$sub"
+  mkdir -p "$external"
+  cat > "$home/data/backlog.md" <<'EOF'
+## Queued
+- [ ] linked-restriction - must not be read through a symlink (repo: alpha)
+
+## Done
+EOF
+  printf 'by=captain\nat=2026-09-12T00:00:00Z\nreason=external record\n' \
+    > "$external/linked-restriction"
+  ln -s "$external" "$home/data/dispatch-restrictions"
+
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-backlog-handoff.sh" design linked-restriction 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "local handoff followed a symlinked source restriction directory"
+  assert_contains "$out" 'not a real directory' \
+    "local handoff did not identify the unsafe restriction directory"
+  assert_grep 'linked-restriction' "$home/data/backlog.md" \
+    "local handoff moved the item after refusing its restriction source"
+  assert_no_grep 'linked-restriction' "$sub/data/backlog.md" \
+    "local handoff published the item after refusing its restriction source"
+  pass "local handoff refuses a symlinked restriction source directory"
+}
+
 test_body_moves_when_followed_by_another_item
 test_body_moves_when_followed_by_section_heading
 test_multi_paragraph_body_with_internal_blanks_moves_whole
@@ -550,5 +658,8 @@ test_noncanonical_indented_continuations_refuse_without_changes
 test_indented_heading_is_not_section_boundary
 test_registry_home_with_pre_home_parentheses
 test_registry_home_missing_field_fails_cleanly
+test_dispatch_restriction_moves_with_item
+test_dispatch_restriction_converges_for_already_present_key
+test_dispatch_restriction_source_directory_symlink_refuses
 
 echo "ALL TESTS PASSED"

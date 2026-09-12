@@ -24,7 +24,14 @@
 #     archiving;
 #   - the multi-key classification and idempotent per-key reporting: a key
 #     already present in the secondmate backlog is reported and skipped, and if
-#     any key matches neither backlog nothing is moved.
+#     any key matches neither backlog nothing is moved;
+#   - carrying each handed-off id's dispatch restriction record
+#     (bin/fm-dispatch-restrict-lib.sh) into the destination home, so a restricted
+#     item cannot become dispatchable there just by changing owner. A skipped
+#     already-present key still gets its restriction carried, which is what makes
+#     a converge re-run fix a home that predates the restriction. A record only
+#     ever lands or is overwritten; a handoff never removes one, because only an
+#     explicit `bin/fm-dispatch-restrict.sh lift` does that.
 #
 # What `tasks-axi mv <id>... --to <dest>` owns: moving each full item BLOCK
 # byte-exact (header, body lines, blank separators, and indented pseudo-headings
@@ -62,10 +69,21 @@ MAIN_BACKLOG="$DATA/backlog.md"
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-pr-lib.sh
+. "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-dispatch-restrict-lib.sh
+. "$SCRIPT_DIR/fm-dispatch-restrict-lib.sh"
 
 ACTIVE_HANDOFF_LOCK=
 ACTIVE_REGISTRY_LOCK=
+ACTIVE_TASK_LOCKS=("")
 release_remote_locks() {
+  local lock
+  for lock in "${ACTIVE_TASK_LOCKS[@]}"; do
+    [ -n "$lock" ] || continue
+    fm_lock_release "$lock" || true
+  done
+  ACTIVE_TASK_LOCKS=("")
   if [ -n "$ACTIVE_HANDOFF_LOCK" ]; then
     fm_lock_release "$ACTIVE_HANDOFF_LOCK"
     ACTIVE_HANDOFF_LOCK=
@@ -216,34 +234,9 @@ validate_backlog_file() {
   fi
 }
 
-# Classify a single key by the section it lives under (## In flight /
-# ## Queued / ## Done), or return non-zero if no `- [ ] <key>` / `- [x] <key>`
-# header exists in the file. This reads only section headings and item header
-# lines - never item bodies - so it drives the fleet-level classification (in-
-# flight refusal, already-present idempotency, missing-key abort) without
-# re-implementing the block/body move semantics that tasks-axi mv owns.
-backlog_key_section() {
-  local file=$1 key=$2
-  [ -f "$file" ] || return 1
-  awk -v key="$key" '
-    BEGIN { section = "## Queued" }
-    /^##[[:space:]]+/ {
-      section = $0
-      sub(/^##[[:space:]]+/, "## ", section)
-      sub(/[[:space:]]+$/, "", section)
-      next
-    }
-    /^- \[[ x]\] / {
-      rest = $0
-      sub(/^- \[[ x]\] +/, "", rest)
-      id = rest
-      sub(/[ \t].*/, "", id)
-      if (id == key) { print section; found = 1; exit }
-    }
-    END { exit found ? 0 : 1 }
-  ' "$file"
-}
-
+# Item-body probe used only to refuse a selected item whose continuation lines
+# tasks-axi would not carry. The section and key readers this classification also
+# needs live in bin/fm-tasks-axi-lib.sh, so both ends of a handoff share one copy.
 backlog_key_noncanonical_body_lines() {
   local file=$1 key=$2
   awk -v key="$key" '
@@ -270,50 +263,155 @@ outbox_item_count() { # <path>
   awk '/^- \[[ x]\] / { count++ } END { print count + 0 }' "$1"
 }
 
+acquire_task_locks() { # <state-dir> <keys...>
+  local state_dir=$1 key lock
+  shift
+  mkdir -p "$state_dir" || return 1
+  while IFS= read -r key; do
+    fm_task_id_path_safe "$key" || continue
+    lock="$state_dir/.spawn-$key.lock"
+    fm_lock_acquire_wait "$lock"
+    ACTIVE_TASK_LOCKS+=("$lock")
+  done < <(printf '%s\n' "$@" | LC_ALL=C sort -u)
+}
+
+copy_local_restrictions() { # <destination-data> <keys...>
+  local destination_data=$1 key source destination dir tmp status
+  shift
+  if fm_dispatch_restrict_dir_validate "$DATA" 1; then
+    :
+  else
+    status=$?
+    [ "$status" -eq 1 ] && return 0
+    return "$status"
+  fi
+  dir="$destination_data/dispatch-restrictions"
+  for key in "$@"; do
+    fm_task_id_path_safe "$key" || continue
+    source="$DATA/dispatch-restrictions/$key"
+    destination="$dir/$key"
+    if [ ! -e "$source" ] && [ ! -L "$source" ]; then
+      continue
+    fi
+    [ -f "$source" ] && [ ! -L "$source" ] || {
+      echo "error: dispatch restriction for $key is unsafe: $source" >&2
+      return 1
+    }
+    mkdir -p "$dir" || return 1
+    [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
+    if [ -e "$destination" ] || [ -L "$destination" ]; then
+      if [ ! -f "$destination" ] || [ -L "$destination" ]; then
+        echo "error: destination dispatch restriction for $key is unsafe" >&2
+        return 1
+      fi
+    fi
+    tmp=$(umask 077; mktemp "$dir/.restriction.XXXXXX") || return 1
+    if ! cp -p -- "$source" "$tmp" || ! mv -f -- "$tmp" "$destination"; then
+      rm -f -- "$tmp"
+      return 1
+    fi
+  done
+}
+
+# Every key the outbox already carries is part of the next delivery, so its
+# restriction is read and shipped by remote_deliver_outbox even when this
+# invocation did not name it. Both entry points therefore lock the requested
+# keys and the recovered outbox keys as ONE sorted batch, which keeps the
+# restriction gate closed for recovered keys without an out-of-order acquire.
+OUTBOX_KEYS=("")
+collect_outbox_keys() { # <outbox-path>
+  local outbox=$1 key
+  OUTBOX_KEYS=("")
+  [ -f "$outbox" ] && [ ! -L "$outbox" ] || return 0
+  while IFS= read -r key; do
+    OUTBOX_KEYS+=("$key")
+  done < <(fm_backlog_list_keys "$outbox")
+}
+
+build_remote_restriction_payload() { # <outbox> <payload>
+  local outbox=$1 payload=$2 key source encoded status
+  printf 'FM-DISPATCH-RESTRICTIONS 1\n' > "$payload" || return 1
+  if fm_dispatch_restrict_dir_validate "$DATA" 1; then
+    :
+  else
+    status=$?
+    if [ "$status" -eq 1 ]; then
+      printf 'FM-DISPATCH-RESTRICTIONS-END\n' >> "$payload" || return 1
+      return 0
+    fi
+    return "$status"
+  fi
+  while IFS= read -r key; do
+    fm_task_id_path_safe "$key" || continue
+    source="$DATA/dispatch-restrictions/$key"
+    if [ ! -e "$source" ] && [ ! -L "$source" ]; then
+      continue
+    fi
+    [ -f "$source" ] && [ ! -L "$source" ] || {
+      echo "error: dispatch restriction for $key is unsafe: $source" >&2
+      return 1
+    }
+    encoded=$(base64 < "$source" | tr -d '\n') || return 1
+    printf 'present\t%s\t%s\n' "$key" "$encoded" >> "$payload" || return 1
+  done < <(fm_backlog_list_keys "$outbox")
+  # Only present records are sent, so a short read is otherwise indistinguishable
+  # from "nothing is restricted". The terminator makes the receiver refuse a
+  # truncated payload instead of delivering a restricted task unrestricted.
+  printf 'FM-DISPATCH-RESTRICTIONS-END\n' >> "$payload" || return 1
+}
+
 remote_deliver_outbox() { # <secondmate-id> <outbox-path>
-  local id=$1 outbox=$2 remote_rel receive_out snapshot bytes hash generation counter counter_tmp current
+  local id=$1 outbox=$2 remote_rel receive_out snapshot restrictions bytes hash generation counter counter_tmp current
   [ -f "$outbox" ] && [ ! -L "$outbox" ] || {
     echo "error: pending outbox is unavailable or unsafe: $outbox" >&2
     return 1
   }
   snapshot=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-handoff-payload.XXXXXX") || return 1
+  restrictions=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-handoff-restrictions.XXXXXX") \
+    || { rm -f -- "$snapshot"; return 1; }
+  if ! build_remote_restriction_payload "$outbox" "$restrictions"; then
+    rm -f -- "$snapshot" "$restrictions"
+    return 1
+  fi
   if ! cp -p -- "$outbox" "$snapshot"; then
-    rm -f -- "$snapshot"
+    rm -f -- "$snapshot" "$restrictions"
     return 1
   fi
   bytes=$(LC_ALL=C wc -c < "$snapshot" | tr -d ' ')
-  hash=$(sha256_file "$snapshot") || { rm -f -- "$snapshot"; return 1; }
+  hash=$(sha256_file "$snapshot") || { rm -f -- "$snapshot" "$restrictions"; return 1; }
   counter="$STATE/.remote-handoff-$id.generation"
   current=0
   if [ -e "$counter" ] || [ -L "$counter" ]; then
-    [ -f "$counter" ] && [ ! -L "$counter" ] || { rm -f -- "$snapshot"; return 1; }
-    IFS= read -r current < "$counter" || { rm -f -- "$snapshot"; return 1; }
-    case "$current" in ''|*[!0-9]*) rm -f -- "$snapshot"; return 1 ;; esac
-    [ "${#current}" -le 17 ] || { rm -f -- "$snapshot"; return 1; }
+    [ -f "$counter" ] && [ ! -L "$counter" ] || { rm -f -- "$snapshot" "$restrictions"; return 1; }
+    IFS= read -r current < "$counter" || { rm -f -- "$snapshot" "$restrictions"; return 1; }
+    case "$current" in ''|*[!0-9]*) rm -f -- "$snapshot" "$restrictions"; return 1 ;; esac
+    [ "${#current}" -le 17 ] || { rm -f -- "$snapshot" "$restrictions"; return 1; }
   fi
   generation=$((current + 1))
   counter_tmp=$(umask 077; mktemp "$STATE/.remote-handoff-generation.XXXXXX") \
-    || { rm -f -- "$snapshot"; return 1; }
+    || { rm -f -- "$snapshot" "$restrictions"; return 1; }
   printf '%s\n' "$generation" > "$counter_tmp" \
-    || { rm -f -- "$snapshot" "$counter_tmp"; return 1; }
+    || { rm -f -- "$snapshot" "$restrictions" "$counter_tmp"; return 1; }
   chmod 600 "$counter_tmp" \
-    || { rm -f -- "$snapshot" "$counter_tmp"; return 1; }
+    || { rm -f -- "$snapshot" "$restrictions" "$counter_tmp"; return 1; }
   mv -f -- "$counter_tmp" "$counter" \
-    || { rm -f -- "$snapshot" "$counter_tmp"; return 1; }
+    || { rm -f -- "$snapshot" "$restrictions" "$counter_tmp"; return 1; }
   remote_rel="state/handoff/$id.outbox.md"
   if ! "$SCRIPT_DIR/fm-on.sh" "$id" fm-remote-file.sh put "$remote_rel" 1048576 \
     "$bytes" "$hash" "$generation" < "$snapshot"; then
-    rm -f -- "$snapshot"
+    rm -f -- "$snapshot" "$restrictions"
     echo "error: handoff transfer to $id was unavailable or completion is unknown; outbox preserved at $outbox" >&2
     return 1
   fi
   rm -f -- "$snapshot"
   if ! receive_out=$("$SCRIPT_DIR/fm-on.sh" "$id" fm-backlog-receive.sh \
-    "$remote_rel" "$bytes" "$hash" "$generation" < /dev/null 2>&1); then
+    "$remote_rel" "$bytes" "$hash" "$generation" < "$restrictions" 2>&1); then
+    rm -f -- "$restrictions"
     [ -z "$receive_out" ] || printf '%s\n' "$receive_out" >&2
     echo "error: handoff receipt by $id was unavailable or completion is unknown; outbox preserved at $outbox" >&2
     return 1
   fi
+  rm -f -- "$restrictions"
   rm -f -- "$outbox" || {
     echo "error: remote receipt was confirmed but local outbox cleanup failed: $outbox" >&2
     return 1
@@ -328,8 +426,8 @@ remove_interrupted_source_duplicates() { # <outbox> <keys...>
     remaining=0
     progress=0
     for key in "$@"; do
-      backlog_key_section "$outbox" "$key" >/dev/null 2>&1 || continue
-      if backlog_key_section "$MAIN_BACKLOG" "$key" >/dev/null 2>&1; then
+      fm_backlog_key_section "$outbox" "$key" >/dev/null 2>&1 || continue
+      if fm_backlog_key_section "$MAIN_BACKLOG" "$key" >/dev/null 2>&1; then
         remaining=$((remaining + 1))
         if tasks-axi rm "$key" --file "$MAIN_BACKLOG" >/dev/null 2>&1; then
           progress=$((progress + 1))
@@ -365,8 +463,8 @@ remote_handoff() { # <secondmate-id> <keys...>
   done_items=()
   not_queued=()
   for key in "${requested[@]}"; do
-    out_section=$(backlog_key_section "$outbox" "$key" 2>/dev/null || true)
-    main_section=$(backlog_key_section "$MAIN_BACKLOG" "$key" 2>/dev/null || true)
+    out_section=$(fm_backlog_key_section "$outbox" "$key" 2>/dev/null || true)
+    main_section=$(fm_backlog_key_section "$MAIN_BACKLOG" "$key" 2>/dev/null || true)
     if [ -n "$out_section" ]; then
       [ "$out_section" = '## Queued' ] || not_queued+=("$key")
       already+=("$key")
@@ -437,6 +535,8 @@ resume_remote_outbox() { # <secondmate-id> <outbox-path>
     echo "error: unsafe pending handoff outbox: $outbox" >&2
     return 1
   fi
+  collect_outbox_keys "$outbox"
+  acquire_task_locks "$STATE" "${OUTBOX_KEYS[@]}" || return 1
   remote_deliver_outbox "$id" "$outbox"
 }
 
@@ -463,6 +563,8 @@ REMOTE=$(secondmate_registry_field "$REG" "$ID" remote 2>/dev/null || true)
 if [ "$REMOTE" = 1 ]; then
   ACTIVE_HANDOFF_LOCK="$STATE/.backlog-handoff-$ID.lock"
   fm_lock_acquire_wait "$ACTIVE_HANDOFF_LOCK"
+  collect_outbox_keys "$DATA/handoff/$ID.outbox.md"
+  acquire_task_locks "$STATE" "$@" "${OUTBOX_KEYS[@]}" || exit 1
   if remote_handoff "$ID" "$@"; then rc=0; else rc=$?; fi
   release_remote_locks
   exit "$rc"
@@ -475,6 +577,8 @@ SUB_HOME=$(validate_secondmate_home "$ID" "$RAW_HOME") || exit 1
 SUB_BACKLOG="$SUB_HOME/data/backlog.md"
 validate_backlog_file "main backlog" "$MAIN_BACKLOG" || exit 1
 validate_backlog_file "secondmate backlog" "$SUB_BACKLOG" || exit 1
+acquire_task_locks "$STATE" "$@" || exit 1
+acquire_task_locks "$SUB_HOME/state" "$@" || exit 1
 
 # Classify every key before changing anything: move-from-main, already-in-sub, or
 # missing. Abort with no changes if any key matches neither backlog.
@@ -485,9 +589,9 @@ IN_FLIGHT=()
 DONE=()
 NOT_QUEUED=()
 for key in "$@"; do
-  if backlog_key_section "$SUB_BACKLOG" "$key" >/dev/null; then
+  if fm_backlog_key_section "$SUB_BACKLOG" "$key" >/dev/null; then
     ALREADY+=("$key")
-  elif section=$(backlog_key_section "$MAIN_BACKLOG" "$key"); then
+  elif section=$(fm_backlog_key_section "$MAIN_BACKLOG" "$key"); then
     case "$section" in
       "## Queued") TO_MOVE+=("$key") ;;
       "## In flight") IN_FLIGHT+=("$key") ;;
@@ -520,6 +624,8 @@ if [ "$FAILED" -ne 0 ]; then
   echo "       nothing was moved." >&2
   exit 1
 fi
+
+copy_local_restrictions "$SUB_HOME/data" "$@" || exit 1
 
 if [ "${#TO_MOVE[@]}" -eq 0 ]; then
   echo "nothing to move: ${ALREADY[*]:-no keys} already present in $SUB_BACKLOG"

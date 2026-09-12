@@ -12,6 +12,8 @@
 # read the scout's report (AGENTS.md section 7); data/projects.md holds the
 # captain's standing posture as context, and this script never looks it up.
 # no-mistakes-prod-only is a registry policy rather than a task mode and is refused.
+# A dispatch-restricted scout is refused before any durable record changes;
+# AGENTS.md section 10 owns that restriction contract.
 # Usage: fm-promote.sh <task-id> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off>
 set -eu
 
@@ -19,11 +21,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-dispatch-restrict-lib.sh
+. "$SCRIPT_DIR/fm-dispatch-restrict-lib.sh"
 
 MODE=
 YOLO=
@@ -77,6 +82,8 @@ ID=${POS[0]}
 fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; }
 CONTROL_LOCK="$STATE/.control-$ID.lock"
 CONTROL_LOCK_HELD=0
+SPAWN_LOCK="$STATE/.spawn-$ID.lock"
+SPAWN_LOCK_HELD=0
 META_LOCK=
 META_LOCK_HELD=0
 TMP=
@@ -86,6 +93,10 @@ promote_cleanup() {
   if [ "$META_LOCK_HELD" = 1 ]; then
     META_LOCK_HELD=0
     fm_lock_release "$META_LOCK" || true
+  fi
+  if [ "$SPAWN_LOCK_HELD" = 1 ]; then
+    SPAWN_LOCK_HELD=0
+    fm_lock_release "$SPAWN_LOCK" || true
   fi
   if [ "$CONTROL_LOCK_HELD" = 1 ]; then
     CONTROL_LOCK_HELD=0
@@ -99,6 +110,16 @@ fm_lock_try_acquire "$CONTROL_LOCK" || {
   exit 1
 }
 CONTROL_LOCK_HELD=1
+fm_lock_acquire_wait "$SPAWN_LOCK"
+SPAWN_LOCK_HELD=1
+if fm_dispatch_restrict_active "$DATA" "$ID"; then
+  echo "error: task $ID is under a captain dispatch restriction set by ${FM_DISPATCH_RESTRICT_BY:-unknown} on ${FM_DISPATCH_RESTRICT_AT:-an unknown date}: ${FM_DISPATCH_RESTRICT_REASON:-no reason recorded}" >&2
+  echo "error: promotion is refused; lift it deliberately first with: bin/fm-dispatch-restrict.sh lift $ID" >&2
+  exit 1
+else
+  restrict_status=$?
+  [ "$restrict_status" -eq 1 ] || exit "$restrict_status"
+fi
 "$FM_ROOT/bin/fm-guard.sh" || true
 META="$STATE/$ID.meta"
 [ -d "$STATE" ] || { echo "error: state dir not found: $STATE" >&2; exit 1; }

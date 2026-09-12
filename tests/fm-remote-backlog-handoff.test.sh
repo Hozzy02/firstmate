@@ -84,7 +84,12 @@ shift 2
 [ "$host" = remote-mac ] || exit 91
 [ "$entry" = fm-remote-entrypoint.sh ] || exit 92
 argv_b64=$4
-command_name=$(perl -MMIME::Base64=decode_base64 -e '$d=decode_base64($ARGV[0]); ($c)=split(/\0/, $d); print $c' "$argv_b64")
+argv_tmp=$(mktemp)
+if ! printf '%s' "$argv_b64" | base64 --decode > "$argv_tmp" 2>/dev/null; then
+  printf '%s' "$argv_b64" | base64 -D > "$argv_tmp" 2>/dev/null || exit 93
+fi
+command_name=$(tr '\0' '\n' < "$argv_tmp" | sed -n '1p')
+rm -f -- "$argv_tmp"
 case "${FM_FAKE_SSH_MODE:-normal}:$command_name" in
   unreachable:*) exit 255 ;;
   serialize:fm-backlog-receive.sh)
@@ -183,6 +188,36 @@ rm -f "$REMOTE/state/handoff"
 mv "$TMP_ROOT/pinned-handoff" "$REMOTE/state/handoff"
 pass "confined put rejects directory replacement without external writes"
 
+# Only restricted ids appear in the restriction payload, so a short read looks
+# exactly like "nothing is restricted". Receipt must refuse a payload that stops
+# before its terminator rather than publish a possibly-restricted item.
+printf '## In flight\n\n## Queued\n- [ ] truncated-restrictions - refused before delivery (repo: alpha)\n\n## Done\n' \
+  > "$TMP_ROOT/truncated-outbox.md"
+trunc_bytes=$(LC_ALL=C wc -c < "$TMP_ROOT/truncated-outbox.md" | tr -d ' ')
+trunc_hash=$(sha256_file "$TMP_ROOT/truncated-outbox.md")
+FM_HOME="$REMOTE" "$REMOTE_ROOT/bin/fm-remote-file.sh" \
+  put state/handoff/trunc.outbox.md 1048576 "$trunc_bytes" "$trunc_hash" 1 \
+  < "$TMP_ROOT/truncated-outbox.md" >/dev/null
+if printf 'FM-DISPATCH-RESTRICTIONS 1\n' | FM_HOME="$REMOTE" \
+  "$REMOTE_ROOT/bin/fm-backlog-receive.sh" state/handoff/trunc.outbox.md \
+  "$trunc_bytes" "$trunc_hash" 1 > "$TMP_ROOT/trunc-receive.out" 2>&1; then
+  fail "receipt accepted a dispatch restriction payload with no terminator"
+fi
+assert_contains "$(cat "$TMP_ROOT/trunc-receive.out")" 'truncated' \
+  "unterminated restriction payload was not reported as truncated"
+assert_absent "$REMOTE/data/backlog.md" "unterminated restriction payload applied a destination mutation"
+assert_present "$REMOTE/state/handoff/trunc.outbox.md" "unterminated restriction payload discarded the delivered scratch"
+printf 'FM-DISPATCH-RESTRICTIONS 1\nFM-DISPATCH-RESTRICTIONS-END\n' | FM_HOME="$REMOTE" \
+  "$REMOTE_ROOT/bin/fm-backlog-receive.sh" state/handoff/trunc.outbox.md \
+  "$trunc_bytes" "$trunc_hash" 1 >/dev/null \
+  || fail "receipt refused a terminated payload that restricts nothing"
+assert_grep 'truncated-restrictions' "$REMOTE/data/backlog.md" \
+  "terminated empty restriction payload did not deliver its item"
+assert_absent "$REMOTE/data/dispatch-restrictions/truncated-restrictions" \
+  "empty restriction payload invented a destination restriction"
+rm -f "$REMOTE/data/backlog.md" "$REMOTE/state/handoff/.trunc.upload-generation"
+pass "receipt refuses an unterminated restriction payload and accepts an empty one"
+
 write_backlog() {
   cat > "$PARENT/data/backlog.md" <<EOF
 ## In flight
@@ -194,10 +229,40 @@ $1
 EOF
 }
 
+mkdir -p "$PARENT/data/handoff" "$TMP_ROOT/external-restrictions"
+cat > "$PARENT/data/handoff/ios.outbox.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] linked-remote-restriction - must not be transmitted through a symlink (repo: alpha)
+
+## Done
+EOF
+printf 'by=captain\nat=2026-09-12T00:00:00Z\nreason=external record\n' \
+  > "$TMP_ROOT/external-restrictions/linked-remote-restriction"
+ln -s "$TMP_ROOT/external-restrictions" "$PARENT/data/dispatch-restrictions"
+: > "$SSH_COUNT"
+set +e
+handoff_env "$ROOT/bin/fm-backlog-handoff.sh" --resume-pending \
+  > "$TMP_ROOT/symlink-restriction.out" 2>&1
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail "remote handoff followed a symlinked source restriction directory"
+assert_contains "$(cat "$TMP_ROOT/symlink-restriction.out")" 'not a real directory' \
+  "remote handoff did not identify the unsafe restriction directory"
+[ "$(wc -l < "$SSH_COUNT" | tr -d ' ')" -eq 0 ] \
+  || fail "remote handoff contacted the destination after refusing the restriction source"
+assert_present "$PARENT/data/handoff/ios.outbox.md" \
+  "remote handoff discarded its outbox after refusing the restriction source"
+rm -f "$PARENT/data/dispatch-restrictions" "$PARENT/data/handoff/ios.outbox.md"
+pass "remote handoff refuses a symlinked restriction source directory"
+
 # Completion can become unknown after the remote atomic move. The local outbox
 # remains the whole recovery record, the primary dispatch queue is already
 # empty, and a blind retry is not performed inside the transport call.
 write_backlog $'- [ ] ios-a - first iOS task (repo: alpha)\n- [ ] ios-b - dependent iOS task (repo: alpha) blocked-by: ios-a - waits'
+FM_HOME="$PARENT" "$ROOT/bin/fm-dispatch-restrict.sh" set ios-a \
+  --reason "captain hold" --by captain >/dev/null || fail "fixture restriction failed"
 : > "$SSH_COUNT"
 set +e
 FM_FAKE_SSH_MODE=after-receive handoff_env "$ROOT/bin/fm-backlog-handoff.sh" ios ios-a ios-b \
@@ -217,6 +282,10 @@ if ! grep -F ios-a "$REMOTE/data/backlog.md" >/dev/null; then
   fail "remote atomic receipt did not deliver ios-a before the dropped acknowledgement"
 fi
 assert_grep 'ios-b' "$REMOTE/data/backlog.md" "remote atomic receipt did not deliver ios-b before the dropped acknowledgement"
+assert_present "$REMOTE/data/dispatch-restrictions/ios-a" \
+  "remote receipt published a restricted task without its restriction"
+cmp -s "$PARENT/data/dispatch-restrictions/ios-a" "$REMOTE/data/dispatch-restrictions/ios-a" \
+  || fail "remote receipt changed the dispatch restriction record"
 [ "$(cat "$SSH_COUNT")" -eq 2 ] || fail "transport retried an ambiguously completed command"
 pass "ambiguous receipt leaves one durable outbox and no duplicate dispatchable source"
 
@@ -311,8 +380,33 @@ bootstrap_out=$(FM_HOME="$PARENT" FM_ROOT_OVERRIDE="$ROOT" FM_BACKEND=tmux \
   FM_BOOTSTRAP_DETECT_ONLY=1 "$ROOT/bin/fm-bootstrap.sh" 2>&1)
 assert_contains "$bootstrap_out" 'SECONDMATE_HANDOFF: secondmate ios: pending delivery: 1 item(s)' \
   "bootstrap did not surface the pending outbox count"
-handoff_env "$ROOT/bin/fm-backlog-handoff.sh" --resume-pending >/dev/null \
-  || fail "pending bootstrap-visible outbox did not later converge"
+rm -f "$TMP_ROOT/serialize.entered" "$TMP_ROOT/serialize.release"
+rm -rf "$TMP_ROOT/serialize.once"
+FM_FAKE_SSH_MODE=serialize handoff_env "$ROOT/bin/fm-backlog-handoff.sh" --resume-pending \
+  > "$TMP_ROOT/pending-resume.out" 2>&1 &
+pending_resume_pid=$!
+pending_wait=0
+while [ ! -f "$TMP_ROOT/serialize.entered" ]; do
+  kill -0 "$pending_resume_pid" 2>/dev/null || fail "pending resume exited before remote receipt"
+  pending_wait=$((pending_wait + 1))
+  [ "$pending_wait" -le 250 ] || fail "pending resume never reached remote receipt"
+  sleep 0.02
+done
+(
+  touch "$TMP_ROOT/pending-set.started"
+  FM_HOME="$PARENT" "$ROOT/bin/fm-dispatch-restrict.sh" set pending-offline \
+    --reason "concurrent captain hold" --by captain
+) > "$TMP_ROOT/pending-set.out" 2>&1 &
+pending_set_pid=$!
+while [ ! -f "$TMP_ROOT/pending-set.started" ]; do sleep 0.02; done
+sleep 0.2
+kill -0 "$pending_set_pid" 2>/dev/null || fail "restriction set bypassed the pending handoff task lock"
+assert_absent "$PARENT/data/dispatch-restrictions/pending-offline" \
+  "restriction set completed while pending handoff still held the task lock"
+touch "$TMP_ROOT/serialize.release"
+wait "$pending_resume_pid" || fail "pending bootstrap-visible outbox did not later converge"
+wait "$pending_set_pid" || fail "restriction set did not complete after pending handoff released its task lock"
+pass "pending resume holds each source task lock through remote receipt"
 pass "bootstrap detects pending outbox handoffs without a journal"
 
 write_backlog '- [ ] route-race - remains dispatchable through retirement (repo: alpha)'

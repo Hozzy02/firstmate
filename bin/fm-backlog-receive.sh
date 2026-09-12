@@ -3,12 +3,19 @@
 #
 # Usage:
 #   fm-backlog-receive.sh state/handoff/<secondmate-id>.outbox.md <bytes> <sha256> <generation>
+#   < dispatch-restriction-payload
 #
 # The delivered file must be a non-symlink backlog-format scratch file confined
 # to FM_HOME/state/handoff. Every item must be Queued. Keys already present in
 # data/backlog.md are skipped; every remaining key moves in one dependency-closed
 # `tasks-axi mv` transaction under tasks-axi's own locks. On an ambiguous caller
 # retry, destination-present classification makes this operation idempotent.
+#
+# The dispatch-restriction payload on stdin is `FM-DISPATCH-RESTRICTIONS 1`, then
+# one `present\t<task-id>\t<base64 record>` line per RESTRICTED delivered id, then
+# `FM-DISPATCH-RESTRICTIONS-END`. Absent ids are simply not listed, so a handoff
+# never lifts a restriction this home already holds; the terminator is what
+# distinguishes "not restricted" from a truncated payload.
 #
 # If tasks-axi reports a lock failure, this host may remove and retry once only
 # for its own backlog or delivered lock whose pid is dead and whose mtime is at
@@ -28,30 +35,20 @@ LOCK_STALE_SECS=30
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 sha256_file() {
   if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'; else sha256sum "$1" | awk '{print $1}'; fi
 }
 
-backlog_key_section() { # <file> <key>
-  awk -v key="$2" '
-    BEGIN { section = "## Queued" }
-    /^##[[:space:]]+/ { section=$0; sub(/^##[[:space:]]+/, "## ", section); sub(/[[:space:]]+$/, "", section); next }
-    /^- \[[ x]\] / {
-      rest=$0; sub(/^- \[[ x]\] +/, "", rest); id=rest; sub(/[ \t].*/, "", id)
-      if (id == key) { print section; found=1; exit }
-    }
-    END { exit found ? 0 : 1 }
-  ' "$1"
+base64_decode_to() { # <encoded> <destination>
+  local encoded=$1 destination=$2
+  if printf '%s' "$encoded" | base64 --decode > "$destination" 2>/dev/null; then return 0; fi
+  if printf '%s' "$encoded" | base64 -D > "$destination" 2>/dev/null; then return 0; fi
+  return 1
 }
 
-list_keys() { # <file>
-  awk '
-    /^- \[[ x]\] / {
-      rest=$0; sub(/^- \[[ x]\] +/, "", rest); id=rest; sub(/[ \t].*/, "", id)
-      if (id != "" && !seen[id]++) print id
-    }
-  ' "$1"
+base64_encode_file() { # <file>
+  base64 < "$1" | tr -d '\n'
 }
 
 lock_age() {
@@ -111,7 +108,19 @@ ID=${NAME%.outbox.md}
 case "$ID" in ''|*[!A-Za-z0-9._-]*) die "delivered outbox id is unsafe" ;; esac
 TRANSFER_LOCK="$PARENT_REAL/.$ID.upload.lock"
 fm_lock_acquire_wait "$TRANSFER_LOCK" || die "cannot lock delivered outbox"
-trap 'fm_lock_release "$TRANSFER_LOCK" || true' EXIT
+RESTRICTION_STAGE=$(umask 077; mktemp -d "$PARENT_REAL/.restrictions.XXXXXX") \
+  || die "cannot stage dispatch restrictions"
+cleanup_receive() {
+  local lock
+  for lock in "${ACTIVE_TASK_LOCKS[@]}"; do
+    [ -n "$lock" ] || continue
+    fm_lock_release "$lock" || true
+  done
+  rm -rf -- "$RESTRICTION_STAGE"
+  fm_lock_release "$TRANSFER_LOCK" || true
+}
+ACTIVE_TASK_LOCKS=("")
+trap cleanup_receive EXIT
 [ -f "$DELIVERED" ] && [ ! -L "$DELIVERED" ] || die "delivered outbox is not a non-symlink regular file"
 GENERATION_FILE="$PARENT_REAL/.$ID.upload-generation"
 [ -f "$GENERATION_FILE" ] && [ ! -L "$GENERATION_FILE" ] || die "delivered outbox generation is unavailable or unsafe"
@@ -140,13 +149,73 @@ if [ -e "$DEST" ] && [ ! -f "$DEST" ]; then die "destination backlog is not a re
 KEYS=()
 while IFS= read -r key; do
   [ -n "$key" ] && KEYS+=("$key")
-done < <(list_keys "$DELIVERED")
+done < <(fm_backlog_list_keys "$DELIVERED")
+while IFS= read -r key; do
+  case "$key" in ''|.*|*[!A-Za-z0-9._-]*) die "delivered outbox has an unsafe task id" ;; esac
+  task_lock="$FM_HOME/state/.spawn-$key.lock"
+  fm_lock_acquire_wait "$task_lock" || die "cannot lock destination task $key"
+  ACTIVE_TASK_LOCKS+=("$task_lock")
+done < <(printf '%s\n' "${KEYS[@]}" | LC_ALL=C sort -u)
 for key in "${KEYS[@]}"; do
-  section=$(backlog_key_section "$DELIVERED" "$key") || die "delivered key disappeared during classification: $key"
+  section=$(fm_backlog_key_section "$DELIVERED" "$key") || die "delivered key disappeared during classification: $key"
   [ "$section" = '## Queued' ] || die "delivered outbox contains non-Queued item $key under $section"
 done
 
+IFS= read -r RESTRICTION_HEADER || die "dispatch restriction payload is missing"
+[ "$RESTRICTION_HEADER" = 'FM-DISPATCH-RESTRICTIONS 1' ] || die "dispatch restriction payload is malformed"
+RESTRICTIONS_TERMINATED=0
+while IFS=$'\t' read -r presence key encoded extra; do
+  [ -n "$presence$key$encoded$extra" ] || continue
+  [ "$RESTRICTIONS_TERMINATED" -eq 0 ] || die "dispatch restriction payload continues past its terminator"
+  if [ "$presence" = 'FM-DISPATCH-RESTRICTIONS-END' ]; then
+    [ -z "$key$encoded$extra" ] || die "dispatch restriction payload is malformed"
+    RESTRICTIONS_TERMINATED=1
+    continue
+  fi
+  [ "$presence" = present ] && [ -n "$encoded" ] && [ -z "$extra" ] \
+    || die "dispatch restriction payload is malformed"
+  case "$key" in ''|.*|*[!A-Za-z0-9._-]*) die "dispatch restriction payload has an unsafe task id" ;; esac
+  fm_backlog_key_section "$DELIVERED" "$key" >/dev/null 2>&1 \
+    || die "dispatch restriction payload names an item outside the delivered outbox"
+  [ ! -e "$RESTRICTION_STAGE/$key.present" ] \
+    || die "dispatch restriction payload repeats task $key"
+  case "$encoded" in ''|*[!A-Za-z0-9+/=]*) die "dispatch restriction payload encoding is malformed" ;; esac
+  base64_decode_to "$encoded" "$RESTRICTION_STAGE/$key.present" \
+    || die "dispatch restriction payload could not be decoded"
+  normalized=$(base64_encode_file "$RESTRICTION_STAGE/$key.present") \
+    || die "dispatch restriction payload could not be verified"
+  [ "$normalized" = "$encoded" ] || die "dispatch restriction payload encoding is malformed"
+done
+# The payload carries only present records, so an absent record and a lost
+# record look identical. Requiring the sender's terminator is what proves the
+# whole restriction set arrived before any delivered item becomes dispatchable.
+[ "$RESTRICTIONS_TERMINATED" -eq 1 ] || die "dispatch restriction payload is truncated"
+
 mkdir -p "$FM_HOME/data"
+[ -d "$FM_HOME/data" ] && [ ! -L "$FM_HOME/data" ] || die "destination data directory is unsafe"
+if find "$RESTRICTION_STAGE" -type f -print -quit | grep -q .; then
+  RESTRICTION_DEST="$FM_HOME/data/dispatch-restrictions"
+  mkdir -p "$RESTRICTION_DEST" || die "cannot create destination dispatch restriction directory"
+  [ -d "$RESTRICTION_DEST" ] && [ ! -L "$RESTRICTION_DEST" ] \
+    || die "destination dispatch restriction directory is unsafe"
+  for staged in "$RESTRICTION_STAGE"/*; do
+    [ -f "$staged" ] || continue
+    name=$(basename "$staged")
+    key=${name%.*}
+    destination="$RESTRICTION_DEST/$key"
+    if [ -e "$destination" ] || [ -L "$destination" ]; then
+      if [ ! -f "$destination" ] || [ -L "$destination" ]; then
+        die "destination dispatch restriction for $key is unsafe"
+      fi
+    fi
+    tmp=$(umask 077; mktemp "$RESTRICTION_DEST/.restriction.XXXXXX") \
+      || die "cannot stage destination dispatch restriction for $key"
+    if ! cp -p -- "$staged" "$tmp" || ! mv -f -- "$tmp" "$destination"; then
+      rm -f -- "$tmp"
+      die "cannot install destination dispatch restriction for $key"
+    fi
+  done
+fi
 DEST_CREATED=0
 if [ ! -f "$DEST" ]; then
   printf '## In flight\n\n## Queued\n\n## Done\n' > "$DEST"
@@ -155,7 +224,7 @@ fi
 TO_MOVE=()
 ALREADY=()
 for key in "${KEYS[@]}"; do
-  if backlog_key_section "$DEST" "$key" >/dev/null 2>&1; then
+  if fm_backlog_key_section "$DEST" "$key" >/dev/null 2>&1; then
     ALREADY+=("$key")
   else
     TO_MOVE+=("$key")
@@ -178,10 +247,16 @@ if [ "${#TO_MOVE[@]}" -gt 0 ]; then
 fi
 
 for key in "${KEYS[@]}"; do
-  backlog_key_section "$DEST" "$key" >/dev/null 2>&1 \
+  fm_backlog_key_section "$DEST" "$key" >/dev/null 2>&1 \
     || die "receipt verification failed for $key; delivered outbox is preserved"
 done
 rm -f -- "$DELIVERED" || die "receipt succeeded but delivered scratch cleanup failed"
+for task_lock in "${ACTIVE_TASK_LOCKS[@]}"; do
+  [ -n "$task_lock" ] || continue
+  fm_lock_release "$task_lock" || die "receipt succeeded but task lock cleanup failed"
+done
+ACTIVE_TASK_LOCKS=("")
 fm_lock_release "$TRANSFER_LOCK" || die "receipt succeeded but transfer lock cleanup failed"
+rm -rf -- "$RESTRICTION_STAGE"
 trap - EXIT
 printf 'received: %s moved=%s already=%s\n' "$(basename "$REL" .outbox.md)" "${#TO_MOVE[@]}" "${#ALREADY[@]}"

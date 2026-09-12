@@ -54,6 +54,7 @@ It is not deterministic across the verified adapters: codex and grok resume only
 ## Transactional relaunch
 
 `relaunch` is the only verb that changes durable records, so it runs as a transaction with a journal at `state/<id>.control-relaunch`, the prior record preserved beside it, and a ship or scout's prior instructions preserved when a progress note is appended.
+A ship or scout under a dispatch restriction is refused before its checkpoint or running agent is touched; [`AGENTS.md` section 10](../AGENTS.md#10-backlog-contract) owns the restriction and lift contract.
 
 1. **Resolve the profile.**
    An explicit `--harness`, `--model`, or `--effort` wins.

@@ -273,6 +273,27 @@ test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint() {
   pass "fm-control relaunch: a same-harness relaunch replaces the agent in the same endpoint and worktree"
 }
 
+test_restricted_relaunch_refuses_before_checkpoint_or_stop() {
+  local dir out rc before
+  dir=$(new_case restricted rl36)
+  add_ship_task "$dir" rl36 claude
+  mkdir -p "$dir/home/data/dispatch-restrictions"
+  printf 'by=captain\nat=2026-09-12T00:00:00Z\nreason=keep parked\n' \
+    > "$dir/home/data/dispatch-restrictions/rl36"
+  before=$(cat "$dir/home/data/rl36/brief.md")
+
+  out=$(run_control "$dir" rl36 relaunch --note "should not land"); rc=$?
+  expect_code 1 "$rc" "restricted relaunch should refuse"
+  assert_contains "$out" 'dispatch restriction' "relaunch refusal did not name the restriction"
+  [ "$(cat "$dir/home/data/rl36/brief.md")" = "$before" ] \
+    || fail "restricted relaunch edited the brief before refusing"
+  [ "$(cat "$dir/fake/command")" = claude ] \
+    || fail "restricted relaunch stopped the running agent"
+  assert_absent "$dir/home/state/rl36.control-relaunch" \
+    "restricted relaunch checkpointed before refusing"
+  pass "fm-control relaunch checks restrictions before checkpointing or stopping"
+}
+
 test_relaunch_preserves_durable_task_metadata() {
   local dir out rc
   dir=$(new_case durable-meta rl19)
@@ -1313,6 +1334,7 @@ test_spawn_relaunch_refuses_a_pane_outside_the_worktree() {
 }
 
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
+test_restricted_relaunch_refuses_before_checkpoint_or_stop
 test_relaunch_preserves_durable_task_metadata
 test_relaunch_serializes_concurrent_durable_metadata_publication
 test_disabled_relaunch_clears_prior_trace_context

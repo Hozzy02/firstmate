@@ -19,6 +19,14 @@
 # This file is the single owner of FM_TASKS_AXI_MIN. bin/fm-bootstrap.sh turns a
 # failing check into the operator-facing MISSING diagnostic.
 #
+# It is also the single owner of the read-only backlog-format probes both sides of
+# a handoff need - fm_backlog_key_section and fm_backlog_list_keys, used by
+# bin/fm-backlog-handoff.sh and bin/fm-backlog-receive.sh. They read only section
+# headings and item header lines, never item bodies, so `tasks-axi mv` stays the
+# only thing that parses or rewrites a block. Keeping one copy is what stops the
+# two ends of a handoff from drifting apart, which is the class of bug that
+# orphaned item bodies in PR #401.
+#
 # COMPATIBILITY VERDICT REUSE. fm_tasks_axi_compatible costs three tasks-axi
 # subprocesses, and one session start needs the same verdict twice: once in
 # bin/fm-session-start.sh's backlog listing and once in the bin/fm-bootstrap.sh
@@ -120,4 +128,39 @@ fm_tasks_axi_backend_available() {
   local config_dir=$1
   fm_backlog_backend_manual "$config_dir" && return 1
   fm_tasks_axi_compatible
+}
+
+# Print the `## <Section>` heading the item with this key sits under, exiting
+# nonzero when the file has no such item. An item before any heading counts as
+# Queued, matching how a hand-edited backlog reads.
+fm_backlog_key_section() { # <file> <key>
+  local file=$1 key=$2
+  [ -f "$file" ] || return 1
+  awk -v key="$key" '
+    BEGIN { section = "## Queued" }
+    /^##[[:space:]]+/ {
+      section = $0
+      sub(/^##[[:space:]]+/, "## ", section)
+      sub(/[[:space:]]+$/, "", section)
+      next
+    }
+    /^- \[[ x]\] / {
+      rest = $0
+      sub(/^- \[[ x]\] +/, "", rest)
+      id = rest
+      sub(/[ \t].*/, "", id)
+      if (id == key) { print section; found = 1; exit }
+    }
+    END { exit found ? 0 : 1 }
+  ' "$file"
+}
+
+# Print every distinct item key in the file, in first-seen order, from any section.
+fm_backlog_list_keys() { # <file>
+  awk '
+    /^- \[[ x]\] / {
+      rest=$0; sub(/^- \[[ x]\] +/, "", rest); id=rest; sub(/[ \t].*/, "", id)
+      if (id != "" && !seen[id]++) print id
+    }
+  ' "$1"
 }
