@@ -229,6 +229,34 @@ $1
 EOF
 }
 
+mkdir -p "$PARENT/data/handoff" "$TMP_ROOT/external-restrictions"
+cat > "$PARENT/data/handoff/ios.outbox.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] linked-remote-restriction - must not be transmitted through a symlink (repo: alpha)
+
+## Done
+EOF
+printf 'by=captain\nat=2026-09-12T00:00:00Z\nreason=external record\n' \
+  > "$TMP_ROOT/external-restrictions/linked-remote-restriction"
+ln -s "$TMP_ROOT/external-restrictions" "$PARENT/data/dispatch-restrictions"
+: > "$SSH_COUNT"
+set +e
+handoff_env "$ROOT/bin/fm-backlog-handoff.sh" --resume-pending \
+  > "$TMP_ROOT/symlink-restriction.out" 2>&1
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail "remote handoff followed a symlinked source restriction directory"
+assert_contains "$(cat "$TMP_ROOT/symlink-restriction.out")" 'not a real directory' \
+  "remote handoff did not identify the unsafe restriction directory"
+[ "$(wc -l < "$SSH_COUNT" | tr -d ' ')" -eq 0 ] \
+  || fail "remote handoff contacted the destination after refusing the restriction source"
+assert_present "$PARENT/data/handoff/ios.outbox.md" \
+  "remote handoff discarded its outbox after refusing the restriction source"
+rm -f "$PARENT/data/dispatch-restrictions" "$PARENT/data/handoff/ios.outbox.md"
+pass "remote handoff refuses a symlinked restriction source directory"
+
 # Completion can become unknown after the remote atomic move. The local outbox
 # remains the whole recovery record, the primary dispatch queue is already
 # empty, and a blind retry is not performed inside the transport call.

@@ -71,6 +71,8 @@ MAIN_BACKLOG="$DATA/backlog.md"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-dispatch-restrict-lib.sh
+. "$SCRIPT_DIR/fm-dispatch-restrict-lib.sh"
 
 ACTIVE_HANDOFF_LOCK=
 ACTIVE_REGISTRY_LOCK=
@@ -274,8 +276,15 @@ acquire_task_locks() { # <state-dir> <keys...>
 }
 
 copy_local_restrictions() { # <destination-data> <keys...>
-  local destination_data=$1 key source destination dir tmp
+  local destination_data=$1 key source destination dir tmp status
   shift
+  if fm_dispatch_restrict_dir_validate "$DATA" 1; then
+    :
+  else
+    status=$?
+    [ "$status" -eq 1 ] && return 0
+    return "$status"
+  fi
   dir="$destination_data/dispatch-restrictions"
   for key in "$@"; do
     fm_task_id_path_safe "$key" || continue
@@ -320,8 +329,18 @@ collect_outbox_keys() { # <outbox-path>
 }
 
 build_remote_restriction_payload() { # <outbox> <payload>
-  local outbox=$1 payload=$2 key source encoded
+  local outbox=$1 payload=$2 key source encoded status
   printf 'FM-DISPATCH-RESTRICTIONS 1\n' > "$payload" || return 1
+  if fm_dispatch_restrict_dir_validate "$DATA" 1; then
+    :
+  else
+    status=$?
+    if [ "$status" -eq 1 ]; then
+      printf 'FM-DISPATCH-RESTRICTIONS-END\n' >> "$payload" || return 1
+      return 0
+    fi
+    return "$status"
+  fi
   while IFS= read -r key; do
     fm_task_id_path_safe "$key" || continue
     source="$DATA/dispatch-restrictions/$key"

@@ -619,6 +619,34 @@ EOF
   pass "local handoff carries restrictions for already-present keys"
 }
 
+test_dispatch_restriction_source_directory_symlink_refuses() {
+  local home="$TMP_ROOT/restriction-link-main"
+  local sub="$TMP_ROOT/restriction-link-sub"
+  local external="$TMP_ROOT/restriction-link-external"
+  local out rc=0
+  setup_homes "$home" "$sub"
+  mkdir -p "$external"
+  cat > "$home/data/backlog.md" <<'EOF'
+## Queued
+- [ ] linked-restriction - must not be read through a symlink (repo: alpha)
+
+## Done
+EOF
+  printf 'by=captain\nat=2026-09-12T00:00:00Z\nreason=external record\n' \
+    > "$external/linked-restriction"
+  ln -s "$external" "$home/data/dispatch-restrictions"
+
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-backlog-handoff.sh" design linked-restriction 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "local handoff followed a symlinked source restriction directory"
+  assert_contains "$out" 'not a real directory' \
+    "local handoff did not identify the unsafe restriction directory"
+  assert_grep 'linked-restriction' "$home/data/backlog.md" \
+    "local handoff moved the item after refusing its restriction source"
+  assert_no_grep 'linked-restriction' "$sub/data/backlog.md" \
+    "local handoff published the item after refusing its restriction source"
+  pass "local handoff refuses a symlinked restriction source directory"
+}
+
 test_body_moves_when_followed_by_another_item
 test_body_moves_when_followed_by_section_heading
 test_multi_paragraph_body_with_internal_blanks_moves_whole
@@ -632,5 +660,6 @@ test_registry_home_with_pre_home_parentheses
 test_registry_home_missing_field_fails_cleanly
 test_dispatch_restriction_moves_with_item
 test_dispatch_restriction_converges_for_already_present_key
+test_dispatch_restriction_source_directory_symlink_refuses
 
 echo "ALL TESTS PASSED"
