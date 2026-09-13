@@ -208,7 +208,7 @@ Cursor is deliberately outside this cursor-anchored empty-composer matrix becaus
 ## Herdr
 
 The compatibility floor is protocol 14.
-The whole real-Herdr lane's latest active verification uses both Herdr 0.7.4 protocol 16 and Herdr 0.8.0 protocol 19 on macOS aarch64, while focused Herdr 0.7.5 protocol 17, earlier protocol-16, protocol-14, and 0.7.3 evidence is retained where it defines current behavior or fallbacks.
+The whole real-Herdr lane's latest active verification uses Herdr 0.9.0 protocol 22 on macOS arm64, while evidence from the CI-pinned Herdr 0.7.4 protocol 16 lane and focused Herdr 0.8.0 protocol 19, 0.7.5 protocol 17, earlier protocol-16, protocol-14, and 0.7.3 runs is retained where it defines current behavior or fallbacks.
 Protocol 17 keeps every protocol-16 feature gate satisfied; the event and workspace-move floors remain 16.
 Default-on presentation projection has its own floor at Herdr 0.8.0, protocol 19, verified below.
 
