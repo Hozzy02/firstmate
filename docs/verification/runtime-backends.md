@@ -410,6 +410,40 @@ The projected spawn in that run used the historical empty opt-in file, so a home
 One concurrent cross-home recovery case refused under contention on a loaded machine and passed on an immediate rerun; recovery-path presentation lock contention is a deliberate hard refusal rather than a flat fallback, which default-on now makes reachable from any Herdr home.
 That run measured the default-on projection on Herdr 0.8.0 only, while the focus-flash regression below was last run on 0.7.5 before the flip, so neither run covered a defective release under default-on projection; the version floor and the focus-flash suite's Part C close that gap.
 
+The ordering regression, complete real-Herdr family, and focus-flash suite ran on 2026-09-13 against Herdr 0.9.0 protocol 22 on macOS arm64.
+The real suites stripped every inherited Herdr pane and session variable before provisioning their guarded `fm-lab-*` sessions.
+
+```sh
+bin/fm-test-run.sh tests/fm-backend-herdr.test.sh
+env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID -u HERDR_SOCKET_PATH -u HERDR_SESSION \
+  bin/fm-test-run.sh --family real-herdr-gated
+env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID -u HERDR_SOCKET_PATH -u HERDR_SESSION \
+  bin/fm-test-run.sh tests/fm-backend-herdr-focus-flash-e2e.test.sh
+```
+
+Bounded observed output:
+
+```text
+ok - herdr presentation ordering: protocol 22 appends a later child after the existing serialized child block
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=1934461
+FM_TEST_SUMMARY_FAMILY family=backend-dispatch count=1 duration_ms=1934377 failed=0
+
+ok - real Herdr lab: concurrent primary workers form one stable contiguous block without active workspace/tab drift
+ok - real Herdr lab validation completed on Herdr 0.9.0 with the default-session tripwire intact
+evidence: herdr=0.9.0 protocol=22 default-session-tripwire=armed
+FM_TEST_SUMMARY total=12 failed=0 skipped_gate=0 duration_ms=569725
+FM_TEST_SUMMARY_FAMILY family=real-herdr-gated count=12 duration_ms=569048 failed=0
+
+ok - version floor: herdr 0.9.0 protocol 22 is at or above the floor and preserves focus
+ok - version floor: an unconfigured home stays projected on herdr 0.9.0 and the explicit opt-in agrees
+evidence: herdr=0.9.0 protocol=22 steal_live=0 floor_verdict=0 default-session-tripwire=armed
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=4544
+FM_TEST_SUMMARY_FAMILY family=unclassified count=1 duration_ms=4455 failed=0
+```
+
+The concurrent-order assertion now derives its expectation from successful response-derived workspace creates recorded while the session presentation lock is held.
+That preserves the invariant that projected children appear directly under their owning home in Herdr's serialized create order without treating a pre-command instrumentation log as serialization authority.
+
 The restored-shell session-start cleanup ran on 2026-07-24 against Herdr 0.7.5 protocol 17:
 
 ```sh
