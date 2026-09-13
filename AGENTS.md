@@ -52,12 +52,13 @@ Each secondmate has a persistent isolated `FM_HOME`, including its own state, ba
 `bin/fm-send.sh` fails closed unless `FM_HOME` is explicit, so a steer cannot silently resolve against another home.
 
 Tracked files hold shared instructions and tooling; `data/` holds durable private fleet records; `state/` holds runtime records and append-only status events; `config/` holds local operating choices; and `projects/` contains clones that are read-only to firstmate except under hard rule 1's concrete captain-approved project operation exception.
-`.env`, `data/`, `state/`, `config/`, `projects/`, and `.no-mistakes/` are captain-private and gitignored.
-`CLAUDE.md` is a symlink to this file, and `.claude/skills` is a symlink to `.agents/skills`; public `skills/` is committed but is not loaded by firstmate.
+`CLAUDE.md` is a symlink to this file, and `.claude/skills` is a symlink to `.agents/skills`.
 
-Never touch these internal coordination records directly; repair them only through the home-scoped path the emitted supervision protocol names (section 8), and see `docs/architecture.md` and `docs/turnend-guard.md` for their mechanics: `state/.watcher-down`; the `state/.claude-autoarm*` and `state/.turnend-claude-blocks*` family; the `state/.cursor-park-owner*` and `state/.turnend-cursor-blocks` family; the watcher-internal `state/.hash-*`, `state/.count-*`, `state/.stale-*`, `state/.stale-since-*`, `state/.paused-*`, `state/.wedge-escalations-*`, `state/.seen-*`, `state/.hb-surfaced-*`, `state/.last-*`, and `state/.heartbeat-streak` family; and the `state/.subsuper-*` / `state/.supervise-daemon.*` family.
-`state/.watch-triage.log` and each task's `state/.<id>.open-decisions-cursor` are safe to delete, forcing a rebuild rather than losing anything durable.
-`state/<id>.check.sh` runs only hash-validated, registered custom checks and rejects every other state check without execution.
+Never touch these internal coordination records directly; see the owning script headers (`bin/fm-watch.sh`, the turn-end guards, `bin/fm-supervise-daemon.sh`) for their mechanics and `/afk` for the away-mode family: `state/.watcher-down`; the `state/.claude-autoarm*` and `state/.turnend-claude-blocks*` family; the `state/.cursor-park-owner*` and `state/.turnend-cursor-blocks` family; the watcher-internal `state/.hash-*`, `state/.count-*`, `state/.stale-*`, `state/.stale-since-*`, `state/.paused-*`, `state/.wedge-escalations-*`, `state/.seen-*`, `state/.hb-surfaced-*`, `state/.last-*`, and `state/.heartbeat-streak` family; and the `state/.subsuper-*` / `state/.supervise-daemon.*` family.
+`state/procevent/` is written only by `bin/fm-procevent.sh`, and a registered source's presence alone keeps supervision required.
+`state/when/` is written only by `bin/fm-procevent-when.sh`.
+Each task's `state/.<id>.open-decisions-cursor` is written only by `bin/fm-classify-lib.sh`; it and `state/.watch-triage.log` are safe to delete, forcing a rebuild rather than losing anything durable.
+The watcher dispatches validated PR merge polls and the Relay shim only through trusted repository scripts, runs custom `state/<id>.check.sh` files only from hash-validated registered snapshots, and rejects every other state check without execution.
 A `state/<id>.status` line is a wake event, not current-state truth; `bin/fm-crew-state.sh` owns current-state reconciliation.
 Treat `data/captain.md` as the domain-local record of captain preferences, optional `data/captain-shared.md` as the main-authoritative shared captain-preference file for secondmate inheritance, and `data/learnings.md` as curated home-local knowledge, regardless of harness memory.
 
