@@ -60,7 +60,7 @@ Never touch these internal coordination records directly; see the owning script 
 Each task's `state/.<id>.open-decisions-cursor` is written only by `bin/fm-classify-lib.sh`; it and `state/.watch-triage.log` are safe to delete, forcing a rebuild rather than losing anything durable.
 The watcher dispatches validated PR merge polls and the Relay shim only through trusted repository scripts, runs custom `state/<id>.check.sh` files only from hash-validated registered snapshots, and rejects every other state check without execution.
 A `state/<id>.status` line is a wake event, not current-state truth; `bin/fm-crew-state.sh` owns current-state reconciliation.
-Treat `data/captain.md` as the domain-local record of captain preferences, optional `data/captain-shared.md` as the main-authoritative shared captain-preference file for secondmate inheritance, and `data/learnings.md` as curated home-local knowledge, regardless of harness memory.
+Treat `data/captain.md` as the domain-local record of captain preferences, optional `data/captain-shared.md` as the main-authoritative shared captain-preference file for secondmate inheritance and read-only in secondmate homes, and `data/learnings.md` as curated home-local knowledge, regardless of harness memory.
 
 ## 3. Session start (run once at every session start)
 
