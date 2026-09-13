@@ -23,6 +23,7 @@ HERDR_ORIGINAL_PATH=$PATH
 TMP_ROOT=$(mktemp -d "$(cd "${TMPDIR:-/tmp}" && pwd -P)/fm-herdr-presentation.XXXXXX")
 FAKEBIN="$TMP_ROOT/fakebin"
 HERDR_CALL_LOG="$TMP_ROOT/herdr-calls.log"
+WORKSPACE_CREATE_RESULT_LOG="$TMP_ROOT/workspace-create-results.log"
 TREEHOUSE_CALL_LOG="$TMP_ROOT/treehouse-calls.log"
 MOVE_CALL_LOG="$TMP_ROOT/workspace-move-calls.log"
 FOCUS_AUDIT_LOG="$TMP_ROOT/focus-audit.log"
@@ -30,11 +31,12 @@ ACTIVE_SEEDED_CONTROL="$TMP_ROOT/active-seeded-control"
 POST_CREATE_ABORT_CONTROL="$TMP_ROOT/post-create-abort-control"
 mkdir -p "$FAKEBIN"
 : > "$HERDR_CALL_LOG"
+: > "$WORKSPACE_CREATE_RESULT_LOG"
 : > "$TREEHOUSE_CALL_LOG"
 : > "$MOVE_CALL_LOG"
 : > "$FOCUS_AUDIT_LOG"
 REAL_MOVER="$ROOT/bin/backends/herdr-workspace-move.py"
-export REAL_HERDR REAL_TREEHOUSE REAL_MOVER HERDR_CALL_LOG TREEHOUSE_CALL_LOG MOVE_CALL_LOG FOCUS_AUDIT_LOG HERDR_ORIGINAL_PATH HERDR_LAB_HELPER
+export REAL_HERDR REAL_TREEHOUSE REAL_MOVER HERDR_CALL_LOG WORKSPACE_CREATE_RESULT_LOG TREEHOUSE_CALL_LOG MOVE_CALL_LOG FOCUS_AUDIT_LOG HERDR_ORIGINAL_PATH HERDR_LAB_HELPER
 export ACTIVE_SEEDED_CONTROL POST_CREATE_ABORT_CONTROL TMP_ROOT
 
 # Log every production-adapter call, remove its already-validated trailing
@@ -148,6 +150,12 @@ else
   status=$?
 fi
 if [ "$status" -eq 0 ] && [ "$mutation" = workspace-create ]; then
+  # Record the response-derived id and label only after the real create has
+  # completed. The session presentation lock makes this the authoritative
+  # serialized create order; the pre-command call log is only instrumentation
+  # and can interleave with unrelated concurrent reads before their execution.
+  workspace_id=$(printf '%s' "$out" | jq -r '.result.workspace.workspace_id // empty')
+  printf '%s\t%s\n' "$workspace_id" "$label" >> "$WORKSPACE_CREATE_RESULT_LOG"
   case "$label" in
     $'└ active-seeded · p:'*)
       mkdir -p "$ACTIVE_SEEDED_CONTROL"
@@ -433,17 +441,12 @@ normalize_meta() {  # <meta>
 
 log_line_count() { wc -l < "$HERDR_CALL_LOG" | tr -d '[:space:]'; }
 
-projection_labels_from_log() {  # <start-line>
+projection_result_log_line_count() { wc -l < "$WORKSPACE_CREATE_RESULT_LOG" | tr -d '[:space:]'; }
+
+projection_labels_from_result_log() {  # <start-line>
   local start=$1
-  sed -n "$((start + 1)),\$p" "$HERDR_CALL_LOG" | awk -F '\t' '
-    $1 == "workspace" && $2 == "create" {
-      for (i = 1; i < NF; i += 1) {
-        if ($i == "--label" && $(i + 1) ~ /^└ /) {
-          print $(i + 1)
-        }
-      }
-    }
-  '
+  sed -n "$((start + 1)),\$p" "$WORKSPACE_CREATE_RESULT_LOG" \
+    | awk -F '\t' '$2 ~ /^└ / { print $2 }'
 }
 
 session_presentation_lock_path() {
@@ -734,6 +737,7 @@ teardown_task lock-contended "$HOME_DIR" > "$TMP_ROOT/lock-contended-teardown.ou
 assert_focus_is "$CAPTAIN_FOCUS" "bounded presentation lock flat fallback teardown"
 pass "real Herdr lab: bounded lock contention warns and falls back flat without projection or focus drift"
 PROJECTION_ORDER_START=$(log_line_count)
+PROJECTION_RESULT_START=$(projection_result_log_line_count)
 
 [ "$OFF_WT" = "$ON_WT" ] || fail "Treehouse did not reuse the same fixture worktree, so byte comparison is inconclusive"
 normalize_meta "$OFF_META" > "$TMP_ROOT/off.meta.normalized"
@@ -763,10 +767,10 @@ remember_meta_worktree "$ORDER_A_META" >/dev/null
 remember_meta_worktree "$ORDER_B_META" >/dev/null
 
 ORDER_LIST=$(lab workspace list) || fail "could not inspect concurrent presentation ordering"
-CREATED_LABELS=$(projection_labels_from_log "$PROJECTION_ORDER_START")
+CREATED_LABELS=$(projection_labels_from_result_log "$PROJECTION_RESULT_START")
 EXPECTED_LABELS=$(printf 'firstmate\n%s\n%s\n2ndmate-alpha\n2ndmate-bravo' "$PROJECTED_LABEL" "$CREATED_LABELS")
 ACTUAL_LABELS=$(printf '%s' "$ORDER_LIST" | jq -r '.result.workspaces[].label')
-[ "$ACTUAL_LABELS" = "$EXPECTED_LABELS" ] || fail "workspace order was not firstmate, stable primary block, secondmates: $ACTUAL_LABELS"
+[ "$ACTUAL_LABELS" = "$EXPECTED_LABELS" ] || fail "workspace order did not match the successful serialized create order: actual=[$ACTUAL_LABELS] expected=[$EXPECTED_LABELS] creates=[$(cat "$WORKSPACE_CREATE_RESULT_LOG")] moves=[$(cat "$MOVE_CALL_LOG")]"
 PRIMARY_IDS=$(printf '%s' "$ORDER_LIST" | jq -r '
   .result.workspaces[]
   | select((.label | startswith("└ ")) or (.label | startswith("firstmate/")))
@@ -901,7 +905,7 @@ for ROUND in 1 2 3; do
   mkdir -p "$HOME_DIR/data/focus-$ROUND-a" "$HOME_DIR/data/focus-$ROUND-b"
   printf 'Projection focus wave %s fixture A.\n' "$ROUND" > "$HOME_DIR/data/focus-$ROUND-a/brief.md"
   printf 'Projection focus wave %s fixture B.\n' "$ROUND" > "$HOME_DIR/data/focus-$ROUND-b/brief.md"
-  WAVE_LOG_START=$(log_line_count)
+  WAVE_RESULT_START=$(projection_result_log_line_count)
   WAVE_FOCUS_START=$(focus_audit_line_count)
   spawn_task "focus-$ROUND-a" "$HOME_DIR" "$PROJECT_DIR" > "$TMP_ROOT/focus-$ROUND-a.out" 2> "$TMP_ROOT/focus-$ROUND-a.err" &
   WAVE_A_PID=$!
@@ -915,7 +919,7 @@ for ROUND in 1 2 3; do
   remember_meta_worktree "$HOME_DIR/state/focus-$ROUND-b.meta" >/dev/null
   assert_focus_is "$CAPTAIN_FOCUS" "focus wave $ROUND concurrent spawns"
   assert_raw_presentation_mutations_preserved_since "$WAVE_FOCUS_START" "focus wave $ROUND concurrent spawns"
-  WAVE_LABELS=$(projection_labels_from_log "$WAVE_LOG_START")
+  WAVE_LABELS=$(projection_labels_from_result_log "$WAVE_RESULT_START")
   WAVE_EXPECTED=$(printf 'firstmate\n%s\n2ndmate-alpha\n2ndmate-bravo' "$WAVE_LABELS")
   WAVE_ACTUAL=$(lab workspace list | jq -r '.result.workspaces[] | select(.label == "firstmate" or (.label | startswith("└ ")) or (.label | startswith("2ndmate-"))) | .label')
   [ "$WAVE_ACTUAL" = "$WAVE_EXPECTED" ] \
@@ -971,6 +975,7 @@ printf 'Secondmate alpha charter.\n' > "$SECOND_HOME_A/data/charter.md"
 [ ! -e "$SECOND_HOME_B/config/herdr-presentation-spaces" ] \
   || fail "secondmate B unexpectedly had a local presentation setting before inheritance"
 SECOND_SPAWN_LOG_START=$(log_line_count)
+SECOND_SPAWN_RESULT_START=$(projection_result_log_line_count)
 spawn_secondmate_task alpha "$SECOND_HOME_A" > "$TMP_ROOT/alpha.out" 2> "$TMP_ROOT/alpha.err" \
   || fail "secondmate alpha spawn failed: $(cat "$TMP_ROOT/alpha.err")"
 [ -f "$SECOND_HOME_A/config/herdr-presentation-spaces" ] \
@@ -984,7 +989,7 @@ SECOND_WSID=$(grep '^herdr_workspace_id=' "$SECOND_META" | cut -d= -f2-)
 SECOND_LABEL=$(lab workspace get "$SECOND_WSID" | jq -r '.result.workspace.label')
 [ "$SECOND_LABEL" = 2ndmate-alpha ] \
   || fail "secondmate spawn did not use its flat parent workspace: $SECOND_LABEL"
-[ -z "$(projection_labels_from_log "$SECOND_SPAWN_LOG_START")" ] \
+[ -z "$(projection_labels_from_result_log "$SECOND_SPAWN_RESULT_START")" ] \
   || fail "secondmate spawn created a corner projection workspace"
 if sed -n "$((SECOND_SPAWN_LOG_START + 1)),\$p" "$HERDR_CALL_LOG" \
   | grep -E $'^(workspace\tmove|session\tlist)' >/dev/null 2>&1; then
