@@ -739,8 +739,7 @@ EOF
 }
 
 # A newer parked run whose pipeline head is not yet resolvable from the crew
-# checkout must not be skipped in favor of an older failed run on the same
-# branch. With no safely attributable run, the live gate event remains current.
+# checkout must not expose an older failed run from any fallback source.
 test_newer_parked_run_blocks_older_failed_fallback() {
   reset_fakes
   local d short; d=$(new_case newer-parked)
@@ -748,7 +747,7 @@ test_newer_parked_run_blocks_older_failed_fallback() {
   short=$(git -C "$d/wt" rev-parse --short=7 HEAD)
   make_fakebin "$d" >/dev/null
   fm_write_meta "$d/state/newer-parked.meta" "window=fm:fm-newer-parked" "worktree=$d/wt" "kind=ship" "harness=claude"
-  printf 'needs-decision: choose the review disposition\n' > "$d/state/newer-parked.status"
+  printf 'failed: prior validation failed\n' > "$d/state/newer-parked.status"
   arm_idle_record "$d/state" newer-parked
   # The detailed current run is parked, but its pipeline-owned head is not
   # available in this checkout yet, forcing the coarse attribution path.
@@ -760,8 +759,10 @@ test_newer_parked_run_blocks_older_failed_fallback() {
 EOF
 )"
   local out; out=$(run_crew_state "$d" newer-parked)
-  assert_contains "$out" "state: parked" "newer parked run prevents the older failed verdict"
-  assert_contains "$out" "source: status-log" "unbound newest run falls back without selecting older history"
+  assert_contains "$out" "state: unknown" "unbound newest run prevents the older failed verdict"
+  assert_contains "$out" "source: none" "unbound newest run blocks terminal status-log history"
+  assert_contains "$out" "newest same-branch run head is not attributable" "unbound newest run remains distinct"
+  assert_not_contains "$out" "source: status-log" "older status-log history must not become current"
   assert_not_contains "$out" "state: failed" "older failed run must not become current"
   pass "newer parked run blocks an older failed coarse fallback"
 }

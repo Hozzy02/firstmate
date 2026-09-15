@@ -332,11 +332,9 @@ nm_ci_checks_state() {
 # spaces (verified: no quoting, so splitting on the first two whitespace runs
 # is exact) - but branch + coarse status is exactly what this predicate needs:
 # is a run for THIS branch active right now. Echoes the first (most recent)
-# matching row's status word (running/completed/cancelled/failed), or empty
-# when the branch has no safely attributable newest run within
-# FM_CREW_STATE_RUNS_LIMIT rows. Once the newest same-branch row is found, an
-# unbound head ends the search: continuing would let superseded history become
-# the crew's current state.
+# matching row's status word (running/completed/cancelled/failed),
+# newest-unbound-run when that row cannot bind to this worktree, or empty when
+# the branch has no run within FM_CREW_STATE_RUNS_LIMIT rows.
 nm_runs_status_for_branch() {  # <branch>
   local branch=$1 out row st rest br sha
   out=$(nm_run runs --limit "$FM_CREW_STATE_RUNS_LIMIT")
@@ -356,6 +354,7 @@ nm_runs_status_for_branch() {  # <branch>
       # mismatch makes attribution unavailable rather than authorizing an
       # older row from this branch.
       if ! nm_coarse_head_matches_worktree "$sha"; then
+        printf '%s' newest-unbound-run
         return 0
       fi
       printf '%s' "$st"
@@ -392,6 +391,7 @@ HAVE_RUN=0
 # run-step block below skips the TOON field parsing entirely for this crew.
 RUN_SOURCE=full
 COARSE_STATUS=""
+NEWEST_UNBOUND_RUN=0
 # Scouts and secondmates never drive a no-mistakes validation of their own
 # worktree, so skip the lookup for them and read state from pane/log directly.
 if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/null 2>&1; then
@@ -409,7 +409,10 @@ if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/n
       # immediately with a second bounded call would just double the wait
       # for no better answer.
       COARSE_STATUS=$(nm_runs_status_for_branch "$CREW_BRANCH")
-      if [ -n "$COARSE_STATUS" ]; then
+      if [ "$COARSE_STATUS" = newest-unbound-run ]; then
+        NEWEST_UNBOUND_RUN=1
+        COARSE_STATUS=""
+      elif [ -n "$COARSE_STATUS" ]; then
         HAVE_RUN=1
         RUN_SOURCE=coarse
       fi
@@ -555,6 +558,10 @@ if [ "$KIND" != secondmate ]; then
     idle) ;;
     *) emit unknown pane "harness state unavailable ($BUSY_VERDICT)" ;;
   esac
+fi
+
+if [ "$NEWEST_UNBOUND_RUN" = 1 ]; then
+  emit unknown none "newest same-branch run head is not attributable"
 fi
 
 # Fall back to the status log's last line, but ONLY when its verb maps to a real
