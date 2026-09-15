@@ -426,7 +426,12 @@ test_chrome_devtools_axi_min_version() {
     esac
   done <<'ROWS'
 minimum chrome-devtools-axi version is accepted^0.1.34^empty
+newer chrome-devtools-axi patch is accepted^0.1.35^empty
+newer chrome-devtools-axi minor is accepted^0.2.0^empty
+newer chrome-devtools-axi major is accepted^1.0.0^empty
 the patch just below the floor reports an upgrade^0.1.33^missing
+much older chrome-devtools-axi minor reports an upgrade^0.0.9^missing
+unparseable chrome-devtools-axi version reports an upgrade^chrome-devtools-axi development build^missing
 ROWS
   pass "bootstrap enforces chrome-devtools-axi minimum version"
 }
