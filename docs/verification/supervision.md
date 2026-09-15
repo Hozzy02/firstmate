@@ -291,7 +291,8 @@ The secondmate-home scope and manual-repair wake path were measured with Claude 
 The current Stop-owned main/secondmate inclusion and child-worktree exclusion are covered deterministically by `tests/fm-claude-stop-autoarm.test.sh`.
 Session-lock ownership in `bin/fm-session-lock-lib.sh` is decided against a session's whole contiguous harness ancestry rather than one chosen pid, so the Stop auto-arm reaches its lock owner wherever that owner sits: the outermost pid of Claude Code's multi-level `bg-spare` hook worker chain, or an inner pid when a harness-named daemon parents the session.
 Harness identity is read from the executable path and `argv[0]` as well as the command basename, because Claude Code's native installer names the per-session executable by its version (`.../share/claude/versions/2.1.220`): `ps -o comm=` reports that path on macOS and the bare version string on Linux, and neither basename names a harness.
-`tests/fm-session-lock-ancestry.test.sh` pins both platforms' reporting semantics behind a deterministic process table and runs the real Stop auto-arm in version-named, daemon-parented, and combined real process trees.
+Claude Code's own `bg-pty-host` can be reparented to launchd/init (ppid 1) when its owning bg-daemon restarts, opening a gap the ps ancestry walk cannot cross even though the pty host and its `bg-spare` hook children keep running; when the walk has already proven a live claude ancestor and then hits that gap, it is widened with `CLAUDE_PID`, the env var Claude Code sets in every hook and tool-call child to name its own top-level session pid, accepted only once that pid is independently confirmed alive and harness-shaped so a stray or stale value can never manufacture ownership on its own.
+`tests/fm-session-lock-ancestry.test.sh` pins both platforms' reporting semantics behind a deterministic process table and runs the real Stop auto-arm in version-named, daemon-parented, reparented-pty-host, and combined real process trees.
 `tests/fm-watch-arm.test.sh` runs real watcher and arm cycles against durable on-disk state to verify that a delivered reason survives until post-handling acknowledgement and stops replaying after acknowledgement, while an unrelated queue append cannot make a watcher cycle that delivered nothing look successful.
 The same suite ingests a keyed remote-secondmate parent reply through the real adapter, establishes the incremental OPEN DECISIONS cursor, interrupts supervision, and proves re-arm replays every unacknowledged queue row plus the still-open decision through the ordinary drain path.
 It also covers decision-only recovery, interrupted handling, handling-window generation reuse, non-fatal moved-generation acknowledgement with sequence-bounded consumption, and a persistent successor remaining live after recovery is acknowledged.
@@ -309,6 +310,28 @@ Observed output:
 2.1.219 (Claude Code)
 ok - Claude 2.1.219 (Claude Code) live E2E reclaimed a stale session lock through session start, completed two tokenless Stop-owned rewake cycles, and preserved the competing-live-owner boundary
 ```
+
+### Session lock - reparented Claude bg-pty-host
+
+A live main-home Claude session was observed on 2026-09-15 with `state/.lock` naming a live top-level session pid whose `bg-pty-host`/`bg-spare` worker pair had been reparented to launchd (`ppid 1`) after their owning bg-daemon restarted, leaving the ps ancestry walk unable to reach the lock pid from the Stop hook and the Claude Stop auto-arm inert for about a day.
+`ps -o pid,ppid,comm,args` on that machine confirmed the shape directly: the `claude bg-pty-host` process's own `ppid` was `1`, and its `bg-spare` child carried `LAUNCHCTL_ENV_REEXEC=1` in its environment, corroborating the reparent.
+The fix is `CLAUDE_PID`: three live one-shot `claude -p` sessions with instrumented `SessionStart`, `PreToolUse`, and async `Stop` hooks confirmed it is exported fresh per session (a distinct value each run), identical across all three hook types within one session, and equal to the exact pid `fm_harness_ancestry_pid`'s own ps walk finds in the healthy case - so it is a drop-in signal for the walk's answer that does not depend on ps ancestry at all, and survives the reparenting that breaks it.
+
+```sh
+claude --version
+FM_CLAUDE_LIVE_E2E=1 tests/fm-claude-pid-identity-live-e2e.test.sh
+```
+
+Observed output (two runs, confirming a fresh value each time):
+
+```text
+2.1.272 (Claude Code)
+ok - Claude 2.1.272 (Claude Code) live E2E: CLAUDE_PID=54371 (session_id=f485c657-1819-4722-8de3-846e8668a529) reached SessionStart, PreToolUse, and Stop hook children with a stable value
+ok - Claude 2.1.272 (Claude Code) live E2E: CLAUDE_PID=59683 (session_id=3213dc93-fc0c-4e1c-8f96-bd53e266b3c7) reached SessionStart, PreToolUse, and Stop hook children with a stable value
+```
+
+`tests/fm-session-lock-ancestry.test.sh` covers the portable side: a unit case drives a reparented-shape fake process tree (a claude-matching ancestor whose own parent reports `ppid 1`) through `fm_session_lock_owned_by_self`, and three real-process e2e cases run the actual Stop auto-arm through a genuinely orphaned `bg-pty-host`/`bg-spare` chain - one where `CLAUDE_PID` names the live session and ownership is claimed, one with no `CLAUDE_PID` reproducing the original defect as inert rather than mis-owned, and one where `CLAUDE_PID` names a different live claude pid and ownership is still refused.
+The narrower `tests/fm-claude-pid-identity-live-e2e.test.sh` proof above is kept separate from the broader `tests/fm-claude-stop-autoarm-live-e2e.test.sh` continuity suite because the latter's multi-turn rapid-rewake cycle count is sensitive to live model turn-taking and Claude Code version drift unrelated to this identity signal; entangling them would let unrelated flakiness mask, or be mistaken for, a real regression here.
 
 Current entry points:
 

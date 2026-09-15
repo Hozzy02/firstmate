@@ -34,6 +34,19 @@ FM_TEST_LIB_SOURCED=1
 # strips this to verify real refusal.
 export FM_GATE_REFUSE_BYPASS=1
 
+# This suite is itself frequently run FROM a real Claude Code session (a
+# crewmate driving its own task, or an operator's interactive session), which
+# exports CLAUDE_PID naming that outer session's own pid to every child
+# process, this test runner included. bin/fm-session-lock-lib.sh's Claude
+# ancestry walk trusts CLAUDE_PID as a reparented-bg-pty-host fallback, so
+# without this unset every fixture that fakes a DIFFERENT claude harness
+# identity (FAKE_CLAUDE symlinks, synthetic process trees) would leak the real
+# outer session's pid into it and mis-identify the fixture's fake session as
+# the genuine one. Real hook invocations never have this problem: Claude Code
+# sets CLAUDE_PID fresh for each child it spawns rather than inheriting an
+# outer session's value, so this unset only removes test-harness pollution.
+unset CLAUDE_PID
+
 # Resolve the repo root from this library's own location. Consumed by sourcing
 # test files, not by this library, so it reads as "unused" here.
 # shellcheck disable=SC2034
