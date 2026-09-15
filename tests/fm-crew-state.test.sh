@@ -738,6 +738,55 @@ EOF
   pass "cross-branch attribution picks the branch's most recent row"
 }
 
+# A newer parked run whose pipeline head is not yet resolvable from the crew
+# checkout must not be skipped in favor of an older failed run on the same
+# branch. With no safely attributable run, the live gate event remains current.
+test_newer_parked_run_blocks_older_failed_fallback() {
+  reset_fakes
+  local d short; d=$(new_case newer-parked)
+  make_repo_on_branch "$d/wt" fm/feat-newer-parked
+  short=$(git -C "$d/wt" rev-parse --short=7 HEAD)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/newer-parked.meta" "window=fm:fm-newer-parked" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'needs-decision: choose the review disposition\n' > "$d/state/newer-parked.status"
+  arm_idle_record "$d/state" newer-parked
+  # The detailed current run is parked, but its pipeline-owned head is not
+  # available in this checkout yet, forcing the coarse attribution path.
+  FM_FAKE_RUN_HEAD=bbbbbbb
+  FM_FAKE_AXI_STATUS="$(run_parked fm/feat-newer-parked)"
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  running    fm/feat-newer-parked bbbbbbb  2026-09-11 22:10
+  failed     fm/feat-newer-parked ${short}  2026-09-11 20:00
+EOF
+)"
+  local out; out=$(run_crew_state "$d" newer-parked)
+  assert_contains "$out" "state: parked" "newer parked run prevents the older failed verdict"
+  assert_contains "$out" "source: status-log" "unbound newest run falls back without selecting older history"
+  assert_not_contains "$out" "state: failed" "older failed run must not become current"
+  pass "newer parked run blocks an older failed coarse fallback"
+}
+
+# The inverse ordering is intentionally terminal: the first same-branch row is
+# the newest one, so a genuine newest failure must still win over older activity.
+test_newest_failed_run_remains_failed() {
+  reset_fakes
+  local d short; d=$(new_case newest-failed)
+  make_repo_on_branch "$d/wt" fm/feat-newest-failed
+  short=$(git -C "$d/wt" rev-parse --short=7 HEAD)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/newest-failed.meta" "window=fm:fm-newest-failed" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_running fm/other-crew)"
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  failed     fm/feat-newest-failed ${short}  2026-09-11 22:10
+  running    fm/feat-newest-failed ${short}  2026-09-11 20:00
+EOF
+)"
+  local out; out=$(run_crew_state "$d" newest-failed)
+  assert_contains "$out" "state: failed" "genuine newest failed run remains failed"
+  assert_contains "$out" "source: run-step" "newest failed row remains authoritative"
+  pass "newest genuinely failed run remains failed"
+}
+
 test_coarse_run_does_not_probe_other_branch_ci_log_for_ready_status() {
   reset_fakes
   local d short; d=$(new_case coarse-ready-other-log)
@@ -1331,6 +1380,8 @@ test_terminal_passed
 test_terminal_failed
 test_cross_branch_attribution_via_runs_list
 test_cross_branch_attribution_picks_most_recent_row
+test_newer_parked_run_blocks_older_failed_fallback
+test_newest_failed_run_remains_failed
 test_coarse_run_does_not_probe_other_branch_ci_log_for_ready_status
 test_other_branch_run_ignored
 test_no_run_busy_pane

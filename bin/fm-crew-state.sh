@@ -333,7 +333,10 @@ nm_ci_checks_state() {
 # is exact) - but branch + coarse status is exactly what this predicate needs:
 # is a run for THIS branch active right now. Echoes the first (most recent)
 # matching row's status word (running/completed/cancelled/failed), or empty
-# when the branch has no run within FM_CREW_STATE_RUNS_LIMIT rows.
+# when the branch has no safely attributable newest run within
+# FM_CREW_STATE_RUNS_LIMIT rows. Once the newest same-branch row is found, an
+# unbound head ends the search: continuing would let superseded history become
+# the crew's current state.
 nm_runs_status_for_branch() {  # <branch>
   local branch=$1 out row st rest br sha
   out=$(nm_run runs --limit "$FM_CREW_STATE_RUNS_LIMIT")
@@ -349,10 +352,11 @@ nm_runs_status_for_branch() {  # <branch>
     rest=$(trim "$rest")
     sha=${rest%% *}
     if [ "$br" = "$branch" ]; then
-      # Same code-identity rule as axi status: skip a same-branch row whose
-      # short-sha does not match this worktree (rewritten or advanced tip).
+      # Same code-identity rule as axi status. The list is newest-first, so a
+      # mismatch makes attribution unavailable rather than authorizing an
+      # older row from this branch.
       if ! nm_coarse_head_matches_worktree "$sha"; then
-        continue
+        return 0
       fi
       printf '%s' "$st"
       return 0
