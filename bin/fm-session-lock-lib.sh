@@ -106,13 +106,31 @@ fm_harness_process_matches() {  # <comm> <args>
 # claude), with no non-harness process between them. Which pid in that run is the
 # session cannot be read off the ancestry at all, so the whole contiguous run is
 # reported and the callers below decide what they need from it.
+#
+# Claude Code's own bg-pty-host can be reparented to launchd/init (ppid 1) when
+# its owning bg-daemon restarts, while the pty host itself and the bg-spare
+# hooks it fires keep running unaffected. The walk above hits pid 1 at that
+# gap and stops before ever reaching the outer session pid, so a Claude
+# ancestry whose outermost matched process names pid 1 as its parent is widened
+# with one more
+# fact Claude Code itself provides rather than derives from ps: CLAUDE_PID, the
+# env var Claude Code sets in every hook and tool-call child to name its own
+# top-level session pid. Unlike ppid, an inherited env var cannot be changed by
+# reparenting, so it survives the exact gap that breaks the walk. It is only
+# trusted once the walk has already proven this process descends from a real,
+# live claude-matching ancestor (extending=1), and only when it independently
+# names a pid that is itself alive and harness-shaped - so a stray or stale
+# CLAUDE_PID left over in an unrelated shell can never manufacture ownership on
+# its own. Live verification: docs/verification/supervision.md "Session lock -
+# reparented Claude bg-pty-host".
 fm_harness_ancestry_pids() {
-  local pid=$$ comm args extending=0 printed=0
+  local pid=$$ comm args extending=0 reparented=0 printed=0 found=' '
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
     comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
     args=$(ps -o args= -p "$pid" 2>/dev/null)
     if fm_harness_process_matches "$comm" "$args"; then
       printf '%s\n' "$pid"
+      found="$found$pid "
       printed=1
       [ "$FM_HARNESS_IS_CLAUDE" -eq 1 ] || break
       extending=1
@@ -120,8 +138,25 @@ fm_harness_ancestry_pids() {
       break
     fi
     pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    if [ "$extending" -eq 1 ] && [ "$pid" = 1 ]; then
+      reparented=1
+      break
+    fi
     [ -n "$pid" ] && [ "$pid" -gt 1 ] || break
   done
+  if [ "$reparented" -eq 1 ]; then
+    case "${CLAUDE_PID:-}" in
+      ''|*[!0-9]*) : ;;
+      *)
+        case "$found" in
+          *" $CLAUDE_PID "*) : ;;
+          *)
+            fm_harness_pid_alive "$CLAUDE_PID" && { printf '%s\n' "$CLAUDE_PID"; printed=1; }
+            ;;
+        esac
+        ;;
+    esac
+  fi
   [ "$printed" -eq 1 ]
 }
 

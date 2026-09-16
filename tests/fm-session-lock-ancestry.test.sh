@@ -170,9 +170,12 @@ SH
   got=$(lib_eval "$fakebin" 'fm_harness_ancestry_pid') || fail "the contiguous harness run was not resolved"
   [ "$got" = 900 ] || fail "ancestry crossed a non-harness gap, resolved '$got' instead of 900"
   printf '920\n' > "$dir/state/.lock"
-  if lib_eval "$fakebin" "fm_session_lock_owned_by_self '$dir/state'"; then
+  if CLAUDE_PID=920 lib_eval "$fakebin" "fm_session_lock_owned_by_self '$dir/state'"; then
     fail "an unrelated harness beyond a non-harness gap was accepted as this session's lock owner"
   fi
+  got=$(CLAUDE_PID=920 lib_eval "$fakebin" 'fm_harness_ancestry_pid') \
+    || fail "the contiguous harness run was not resolved with CLAUDE_PID present"
+  [ "$got" = 900 ] || fail "CLAUDE_PID crossed a non-harness gap, resolved '$got' instead of 900"
   printf '900\n' > "$dir/state/.lock"
   lib_eval "$fakebin" "fm_session_lock_owned_by_self '$dir/state'" \
     || fail "the contiguous harness run did not recognize its own lock"
@@ -356,10 +359,191 @@ test_e2e_daemon_parented_version_named_session_keeps_its_lock() {
   pass "session-lock e2e: a version-named session under a harness-named daemon keeps its own lock"
 }
 
+# --- unit layer: CLAUDE_PID recognizes a session reparented past a gap -------
+
+test_claude_pid_recognizes_a_session_beyond_a_reparented_gap() {
+  local dir fakebin got
+  dir="$TMP_ROOT/claude-pid-gap"
+  fakebin=$(fm_fakebin "$dir")
+  mkdir -p "$dir/state"
+  # Same shape as test_harness_beyond_a_gap_never_owns_the_lock's "gap" tree,
+  # except pid 910 (the bg-pty-host stand-in) reports ppid 1 directly, exactly
+  # the reparented-daemon shape the fix targets: a live launchd/init parent
+  # with no path back to the outer session pid 920 through ps ancestry alone.
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+field= pid=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) field=$2; shift 2 ;;
+    -p) pid=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+case "$pid:$field" in
+  900:comm=) printf '%s\n' claude ;;
+  900:args=) printf '%s\n' 'claude bg-spare' ;;
+  900:ppid=) printf '%s\n' 910 ;;
+  910:comm=) printf '%s\n' claude ;;
+  910:args=) printf '%s\n' 'claude bg-pty-host' ;;
+  910:ppid=) printf '%s\n' 1 ;;
+  920:comm=) printf '%s\n' claude ;;
+  920:args=) printf '%s\n' claude ;;
+  920:ppid=) printf '%s\n' 1 ;;
+  *:comm=) printf '%s\n' bash ;;
+  *:args=) printf '%s\n' bash ;;
+  *:ppid=) printf '%s\n' 900 ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+  printf '920\n' > "$dir/state/.lock"
+
+  if lib_eval "$fakebin" "fm_session_lock_owned_by_self '$dir/state'"; then
+    fail "the reparented session was owned without CLAUDE_PID, which should still fail closed"
+  fi
+  got=$(CLAUDE_PID=920 lib_eval "$fakebin" 'fm_harness_ancestry_pid') \
+    || fail "CLAUDE_PID did not extend the ancestry past the reparented gap"
+  [ "$got" = 920 ] || fail "ancestry resolved '$got' instead of the CLAUDE_PID-named session 920"
+  CLAUDE_PID=920 lib_eval "$fakebin" "fm_session_lock_owned_by_self '$dir/state'" \
+    || fail "CLAUDE_PID naming the true session pid was not accepted as ownership"
+  if CLAUDE_PID=999999 lib_eval "$fakebin" "fm_session_lock_owned_by_self '$dir/state'"; then
+    fail "an unresolvable CLAUDE_PID (not alive) was accepted as ownership"
+  fi
+  # A live competing session's own pid must not be borrowed as if it were
+  # CLAUDE_PID's claim about THIS session: 900 is alive and claude-shaped but
+  # is not the recorded lock holder.
+  if CLAUDE_PID=900 lib_eval "$fakebin" "fm_session_lock_owned_by_self '$dir/state'"; then
+    fail "CLAUDE_PID naming a different live claude pid than the lock was accepted as ownership"
+  fi
+  pass "session-lock: CLAUDE_PID recognizes this session's own lock across a reparented bg-pty-host gap, without weakening refusal for a different pid"
+}
+
+# --- e2e layer: a genuinely reparented pty-host/bg-spare chain ---------------
+
+# The observed defect's exact shape: a long-lived top-level session process
+# that already holds state/.lock, and a SEPARATE bg-pty-host/bg-spare chain
+# that gets orphaned to pid 1 before firing the real Stop hook, so ps ancestry
+# from the hook can never walk back to the session. Claude Code exports
+# CLAUDE_PID to every hook/tool-call child it spawns, naming that true
+# top-level session pid; an inherited env var is unaffected by the ppid change
+# reparenting causes, so it survives the exact gap that breaks ps ancestry.
+make_reparented_home() {  # <dir>
+  local dir=$1
+  mkdir -p "$dir/state"
+  git init -q "$dir"
+  git -C "$dir" commit -q --allow-empty -m init
+  : > "$dir/AGENTS.md"
+  : > "$dir/state/task.meta"
+  install_autoarm_scripts "$dir"
+  cat > "$dir/session.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$$" > "$FM_HOME/state/session-pid"
+printf '%s\n' "$$" > "$FM_HOME/state/.lock"
+i=0
+while [ "$i" -lt 400 ] && [ ! -e "$FM_HOME/state/hook.rc" ]; do
+  sleep 0.05
+  i=$((i + 1))
+done
+SH
+  cat > "$dir/ptyhost.sh" <<'SH'
+#!/usr/bin/env bash
+i=0
+while [ "$i" -lt 200 ] && [ "$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')" != 1 ]; do
+  sleep 0.05
+  i=$((i + 1))
+done
+"$FM_CLAUDE_BIN" "$FM_HOME/sparehook.sh"
+SH
+  cat > "$dir/sparehook.sh" <<'SH'
+#!/usr/bin/env bash
+"$FM_HOME/bin/fm-claude-stop-autoarm.sh" </dev/null > "$FM_HOME/state/hook.out" 2>&1
+printf '%s\n' "$?" > "$FM_HOME/state/hook.rc"
+SH
+  chmod +x "$dir/session.sh" "$dir/ptyhost.sh" "$dir/sparehook.sh"
+}
+
+# Launches the long-lived session, waits for it to record its own pid, then
+# launches the pty-host chain orphaned to pid 1. CLAUDE_PID in that chain's
+# environment is: the session's own just-recorded pid when $3 is "self" (the
+# real defect's fix path), unset when $3 is "" (reproduces the original
+# defect), or the literal value of $3 otherwise (a different live session's
+# pid, for the competing-identity refusal case).
+run_reparented_fixture() {  # <dir> <claude-bin> <self|""|literal-pid>
+  local dir=$1 claude_bin=$2 claude_pid_mode=$3 i claude_pid_value
+  FM_HOME="$dir" "$claude_bin" "$dir/session.sh" &
+  i=0
+  while [ "$i" -lt 200 ] && [ ! -s "$dir/state/session-pid" ]; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  [ -s "$dir/state/session-pid" ] || fail "the fixture session never recorded its pid"
+  case "$claude_pid_mode" in
+    self) claude_pid_value=$(tr -d '[:space:]' < "$dir/state/session-pid") ;;
+    *) claude_pid_value=$claude_pid_mode ;;
+  esac
+  FM_HOME="$dir" FM_CLAUDE_BIN="$claude_bin" CLAUDE_PID="$claude_pid_value" \
+    bash -c '"$0" "$1" &' "$claude_bin" "$dir/ptyhost.sh"
+  i=0
+  while [ "$i" -lt 400 ] && [ ! -s "$dir/state/hook.rc" ]; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  [ -s "$dir/state/hook.rc" ] || fail "the fixture hook never finished"
+}
+
+test_e2e_reparented_pty_host_claims_the_home_via_claude_pid() {
+  local dir session_pid lock_after
+  dir="$TMP_ROOT/e2e-reparented-match"
+  make_reparented_home "$dir"
+  run_reparented_fixture "$dir" "$NAMED_CLAUDE" self
+  session_pid=$(tr -d '[:space:]' < "$dir/state/session-pid")
+  lock_after=$(tr -d '[:space:]' < "$dir/state/.lock")
+  expect_code 2 "$(hook_rc "$dir")" "a session reparented past bg-pty-host must still claim its home and rewake via CLAUDE_PID"
+  [ -e "$dir/state/arm-ran" ] || fail "supervision never armed for a reparented pty-host session"
+  [ "$(epoch_outcome "$dir")" = rewake ] || fail "no claim was recorded, got: $(epoch_outcome "$dir")"
+  [ "$lock_after" = "$session_pid" ] || fail "the live session's lock was disturbed: expected $session_pid, got $lock_after"
+  pass "session-lock e2e: a session reparented past bg-pty-host claims its home via CLAUDE_PID and arms supervision"
+}
+
+test_e2e_reparented_pty_host_without_claude_pid_stays_inert() {
+  local dir session_pid lock_after
+  dir="$TMP_ROOT/e2e-reparented-no-claude-pid"
+  make_reparented_home "$dir"
+  run_reparented_fixture "$dir" "$NAMED_CLAUDE" ""
+  session_pid=$(tr -d '[:space:]' < "$dir/state/session-pid")
+  lock_after=$(tr -d '[:space:]' < "$dir/state/.lock")
+  expect_code 0 "$(hook_rc "$dir")" "without CLAUDE_PID a reparented chain must stay inert rather than mis-owning or corrupting the lock"
+  [ ! -e "$dir/state/arm-ran" ] || fail "the hook armed without any identity proof reaching the session"
+  [ "$lock_after" = "$session_pid" ] || fail "the live session's lock was disturbed: expected $session_pid, got $lock_after"
+  pass "session-lock e2e: a reparented chain with no CLAUDE_PID reproduces the original defect (inert, not mis-owned)"
+}
+
+test_e2e_reparented_pty_host_wrong_claude_pid_stays_inert() {
+  local dir decoy_pid session_pid lock_after
+  dir="$TMP_ROOT/e2e-reparented-wrong-claude-pid"
+  make_reparented_home "$dir"
+  "$NAMED_CLAUDE" -c 'sleep 5' &
+  decoy_pid=$!
+  run_reparented_fixture "$dir" "$NAMED_CLAUDE" "$decoy_pid"
+  kill "$decoy_pid" 2>/dev/null || true
+  wait "$decoy_pid" 2>/dev/null || true
+  session_pid=$(tr -d '[:space:]' < "$dir/state/session-pid")
+  lock_after=$(tr -d '[:space:]' < "$dir/state/.lock")
+  expect_code 0 "$(hook_rc "$dir")" "CLAUDE_PID naming a different live claude session must not claim this home"
+  [ ! -e "$dir/state/arm-ran" ] || fail "the hook armed while CLAUDE_PID named a different live session"
+  [ "$lock_after" = "$session_pid" ] || fail "the live session's lock was disturbed: expected $session_pid, got $lock_after"
+  pass "session-lock e2e: CLAUDE_PID naming a different live session still refuses ownership of a reparented chain"
+}
+
 test_version_named_session_is_identified_on_both_platforms
 test_ordinary_paths_are_never_harness_processes
 test_harness_beyond_a_gap_never_owns_the_lock
 test_competing_version_named_session_is_seen_as_live
+test_claude_pid_recognizes_a_session_beyond_a_reparented_gap
 test_e2e_version_named_session_claims_the_home
 test_e2e_daemon_parented_session_claims_the_home
 test_e2e_daemon_parented_version_named_session_keeps_its_lock
+test_e2e_reparented_pty_host_claims_the_home_via_claude_pid
+test_e2e_reparented_pty_host_without_claude_pid_stays_inert
+test_e2e_reparented_pty_host_wrong_claude_pid_stays_inert
