@@ -170,9 +170,12 @@ SH
   got=$(lib_eval "$fakebin" 'fm_harness_ancestry_pid') || fail "the contiguous harness run was not resolved"
   [ "$got" = 900 ] || fail "ancestry crossed a non-harness gap, resolved '$got' instead of 900"
   printf '920\n' > "$dir/state/.lock"
-  if lib_eval "$fakebin" "fm_session_lock_owned_by_self '$dir/state'"; then
+  if CLAUDE_PID=920 lib_eval "$fakebin" "fm_session_lock_owned_by_self '$dir/state'"; then
     fail "an unrelated harness beyond a non-harness gap was accepted as this session's lock owner"
   fi
+  got=$(CLAUDE_PID=920 lib_eval "$fakebin" 'fm_harness_ancestry_pid') \
+    || fail "the contiguous harness run was not resolved with CLAUDE_PID present"
+  [ "$got" = 900 ] || fail "CLAUDE_PID crossed a non-harness gap, resolved '$got' instead of 900"
   printf '900\n' > "$dir/state/.lock"
   lib_eval "$fakebin" "fm_session_lock_owned_by_self '$dir/state'" \
     || fail "the contiguous harness run did not recognize its own lock"

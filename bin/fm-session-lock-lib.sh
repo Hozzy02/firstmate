@@ -111,8 +111,8 @@ fm_harness_process_matches() {  # <comm> <args>
 # its owning bg-daemon restarts, while the pty host itself and the bg-spare
 # hooks it fires keep running unaffected. The walk above hits pid 1 at that
 # gap and stops before ever reaching the outer session pid, so a Claude
-# ancestry that is genuinely still extending (found at least one claude match
-# and never reached its own non-harness terminus) is widened with one more
+# ancestry whose outermost matched process names pid 1 as its parent is widened
+# with one more
 # fact Claude Code itself provides rather than derives from ps: CLAUDE_PID, the
 # env var Claude Code sets in every hook and tool-call child to name its own
 # top-level session pid. Unlike ppid, an inherited env var cannot be changed by
@@ -124,7 +124,7 @@ fm_harness_process_matches() {  # <comm> <args>
 # its own. Live verification: docs/verification/supervision.md "Session lock -
 # reparented Claude bg-pty-host".
 fm_harness_ancestry_pids() {
-  local pid=$$ comm args extending=0 printed=0 found=' '
+  local pid=$$ comm args extending=0 reparented=0 printed=0 found=' '
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
     comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
     args=$(ps -o args= -p "$pid" 2>/dev/null)
@@ -138,9 +138,13 @@ fm_harness_ancestry_pids() {
       break
     fi
     pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    if [ "$extending" -eq 1 ] && [ "$pid" = 1 ]; then
+      reparented=1
+      break
+    fi
     [ -n "$pid" ] && [ "$pid" -gt 1 ] || break
   done
-  if [ "$extending" -eq 1 ]; then
+  if [ "$reparented" -eq 1 ]; then
     case "${CLAUDE_PID:-}" in
       ''|*[!0-9]*) : ;;
       *)
