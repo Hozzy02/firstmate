@@ -1270,10 +1270,11 @@ test_usage_error() {
 # attribute a historical no-mistakes run (multi-stage branch reuse incident).
 test_historical_same_branch_rewritten_head_not_current() {
   reset_fakes
-  local d old_head new_head out
+  local d old_head old_short new_head out
   d=$(new_case rewritten-head)
   make_repo_on_branch "$d/wt" fm/todo-flag
   old_head=$(git -C "$d/wt" rev-parse HEAD)
+  old_short=$(git -C "$d/wt" rev-parse --short=7 HEAD)
   # Simulate a rebase rewrite: orphan new history on the same branch name.
   git -C "$d/wt" checkout -q --orphan tmp-rewrite
   git -C "$d/wt" commit -q --allow-empty -m 'rewritten tip'
@@ -1286,6 +1287,10 @@ test_historical_same_branch_rewritten_head_not_current() {
   # Historical run still reports the pre-rewrite head on the reused branch.
   FM_FAKE_RUN_HEAD="$old_head"
   FM_FAKE_AXI_STATUS="$(run_parked fm/todo-flag)"
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  running    fm/todo-flag ${old_short}  2026-09-11 20:00
+EOF
+)"
   FM_FAKE_BUSY=0
   arm_idle_record "$d/state" wishlist
   out=$(run_crew_state "$d" wishlist)

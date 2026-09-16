@@ -560,10 +560,6 @@ if [ "$KIND" != secondmate ]; then
   esac
 fi
 
-if [ "$NEWEST_UNBOUND_RUN" = 1 ]; then
-  emit unknown none "newest same-branch run head is not attributable"
-fi
-
 # Fall back to the status log's last line, but ONLY when its verb maps to a real
 # run-state. A decision-closing event - resolved: (fm-classify-lib.sh's
 # FM_CLASSIFY_RESOLVE_VERB), and any future decision-only sibling - is NOT a state:
@@ -576,9 +572,17 @@ fi
 # `unknown` verdict as the "not a state" test needs no second verb list here.
 if [ -n "$LOG_VERB" ]; then
   LOG_STATE=$(map_log_state "$LOG_LINE")
-  if [ "$LOG_STATE" != unknown ]; then
-    emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")"
-  fi
+  case "$LOG_STATE" in
+    done|failed)
+      [ "$NEWEST_UNBOUND_RUN" = 1 ] || emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")"
+      ;;
+    unknown) ;;
+    *) emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")" ;;
+  esac
+fi
+
+if [ "$NEWEST_UNBOUND_RUN" = 1 ]; then
+  emit unknown none "newest same-branch run head is not attributable"
 fi
 
 emit unknown none "no current-state source available"
