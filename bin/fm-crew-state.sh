@@ -27,7 +27,9 @@
 #      A run matches when its head equals the worktree HEAD, or the worktree HEAD
 #      is an ancestor of the run head (pipeline fix commits advanced the run on
 #      the same line of history). Local work that advanced past the run head, or
-#      diverged from it, invalidates attribution.
+#      diverged from it, invalidates attribution. Because the coarse run list is
+#      newest-first, an unbindable newest same-branch row also stops attribution;
+#      it never authorizes scanning backward to an older same-branch outcome.
 #      The run-step is AUTHORITATIVE: running/fixing -> working, ci -> working,
 #      awaiting_approval/fix_review -> parked (with gate findings), terminal
 #      passed/checks-passed -> done, failed/cancelled -> failed. EXCEPT: while
@@ -39,9 +41,12 @@
 #      the run-step shows the run moved on, the log is deterministically stale and
 #      is flagged superseded. A genuinely parked run plus a needs-decision log
 #      agree, and are reported as parked.
-#   4. No run for this crew (pre-validation, or kind=scout): fall back to the
-#      recorded backend's pane busy state, then the status log's last line only
-#      when its verb maps to a recognized run-state. Decision-only events such as
+#   4. No attributable run for this crew (pre-validation, kind=scout, or an
+#      unbindable newest same-branch row): fall back to the recorded backend's
+#      pane busy state, then the status log's last line only when its verb maps
+#      to a recognized run-state. An unbindable newest row suppresses terminal
+#      done/failed log history, because it may describe an older superseded run;
+#      nonterminal log state remains usable. Decision-only events such as
 #      `resolved` never become current state or detail.
 #   5. Missing meta or torn-down worktree: report unknown · none. If no run is
 #      attributed to this crew, a dead endpoint also reports unknown · none rather
@@ -332,8 +337,9 @@ nm_ci_checks_state() {
 # spaces (verified: no quoting, so splitting on the first two whitespace runs
 # is exact) - but branch + coarse status is exactly what this predicate needs:
 # is a run for THIS branch active right now. Echoes the first (most recent)
-# matching row's status word (running/completed/cancelled/failed), or empty
-# when the branch has no run within FM_CREW_STATE_RUNS_LIMIT rows.
+# matching row's status word (running/completed/cancelled/failed),
+# newest-unbound-run when that row cannot bind to this worktree, or empty when
+# the branch has no run within FM_CREW_STATE_RUNS_LIMIT rows.
 nm_runs_status_for_branch() {  # <branch>
   local branch=$1 out row st rest br sha
   out=$(nm_run runs --limit "$FM_CREW_STATE_RUNS_LIMIT")
@@ -349,10 +355,12 @@ nm_runs_status_for_branch() {  # <branch>
     rest=$(trim "$rest")
     sha=${rest%% *}
     if [ "$br" = "$branch" ]; then
-      # Same code-identity rule as axi status: skip a same-branch row whose
-      # short-sha does not match this worktree (rewritten or advanced tip).
+      # Same code-identity rule as axi status. The list is newest-first, so a
+      # mismatch makes attribution unavailable rather than authorizing an
+      # older row from this branch.
       if ! nm_coarse_head_matches_worktree "$sha"; then
-        continue
+        printf '%s' newest-unbound-run
+        return 0
       fi
       printf '%s' "$st"
       return 0
@@ -388,6 +396,7 @@ HAVE_RUN=0
 # run-step block below skips the TOON field parsing entirely for this crew.
 RUN_SOURCE=full
 COARSE_STATUS=""
+NEWEST_UNBOUND_RUN=0
 # Scouts and secondmates never drive a no-mistakes validation of their own
 # worktree, so skip the lookup for them and read state from pane/log directly.
 if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/null 2>&1; then
@@ -405,7 +414,10 @@ if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/n
       # immediately with a second bounded call would just double the wait
       # for no better answer.
       COARSE_STATUS=$(nm_runs_status_for_branch "$CREW_BRANCH")
-      if [ -n "$COARSE_STATUS" ]; then
+      if [ "$COARSE_STATUS" = newest-unbound-run ]; then
+        NEWEST_UNBOUND_RUN=1
+        COARSE_STATUS=""
+      elif [ -n "$COARSE_STATUS" ]; then
         HAVE_RUN=1
         RUN_SOURCE=coarse
       fi
@@ -565,9 +577,17 @@ fi
 # `unknown` verdict as the "not a state" test needs no second verb list here.
 if [ -n "$LOG_VERB" ]; then
   LOG_STATE=$(map_log_state "$LOG_LINE")
-  if [ "$LOG_STATE" != unknown ]; then
-    emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")"
-  fi
+  case "$LOG_STATE" in
+    done|failed)
+      [ "$NEWEST_UNBOUND_RUN" = 1 ] || emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")"
+      ;;
+    unknown) ;;
+    *) emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")" ;;
+  esac
+fi
+
+if [ "$NEWEST_UNBOUND_RUN" = 1 ]; then
+  emit unknown none "newest same-branch run head is not attributable"
 fi
 
 emit unknown none "no current-state source available"
