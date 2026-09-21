@@ -439,6 +439,42 @@ test_herdr_lab_omission_is_loud_for_ship_and_scout() {
   pass "fm-brief.sh: ship and scout scaffolds make omitted Herdr intent fail-visible"
 }
 
+# Firstmate fills a scaffold by replacing every {TASK} token, so each generated
+# variant must carry exactly one; a second token pasted the whole task into the
+# middle of the Herdr safety gate.
+test_scaffolds_carry_task_token_exactly_once() {
+  local home id brief count marker filled variant repo want
+  for variant in "ship-nm:--mode no-mistakes" "ship-dp:--mode direct-PR" "ship-lo:--mode local-only" \
+    "ship-nm-lab:--mode no-mistakes --herdr-lab" "scout:--scout" "scout-lab:--scout --herdr-lab" \
+    "second:--secondmate --no-projects"; do
+    id="brief-token-${variant%%:*}"
+    home="$TMP_ROOT/task-token-home-${variant%%:*}"
+    mkdir -p "$home/data"
+    repo=firstmate
+    case "$variant" in second:*) repo= ;; esac
+    # shellcheck disable=SC2086  # variant flags and the optional repo are deliberately word-split
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" $repo ${variant#*:} >/dev/null 2>&1 \
+      || fail "$id: fm-brief.sh ${variant#*:} failed"
+    brief="$home/data/$id/brief.md"
+    count=$(grep -o '{TASK}' "$brief" | wc -l | tr -d ' ')
+    # A secondmate charter deliberately has two: the charter and the routing scope default to one text.
+    want=1
+    case "$variant" in second:*) want=2 ;; esac
+    [ "$count" = "$want" ] || fail "$id: expected $want {TASK} token(s), found $count"
+    marker="UNIQUE-TASK-MARKER-$id"
+    filled=$(sed "s/{TASK}/$marker/g" "$brief")
+    count=$(printf '%s\n' "$filled" | grep -o "$marker" | wc -l | tr -d ' ')
+    [ "$count" = "$want" ] || fail "$id: filled task appeared $count times, expected $want"
+    case "${variant%%:*}" in
+      ship-nm|ship-dp|ship-lo|scout)
+        printf '%s\n' "$filled" | grep -qF "this scaffold cannot inspect the task text that replaces the task placeholder above later." \
+          || fail "$id: Herdr safety-gate sentence not intact after fill"
+        printf '%s\n' "$filled" | grep -qF -- "--herdr-lab" || fail "$id: gate lost --herdr-lab regeneration direction" ;;
+    esac
+  done
+  pass "fm-brief.sh: every ship and scout scaffold carries {TASK} exactly once and fills without corrupting the Herdr gate"
+}
+
 test_secondmate_no_projects_charter() {
   local home brief status
   home="$TMP_ROOT/no-projects-home"
@@ -724,6 +760,7 @@ test_herdr_lab_contract_is_explicit_and_complete
 test_herdr_lab_contract_quotes_foreign_firstmate_path
 test_herdr_lab_omission_is_loud_for_ship_and_scout
 test_herdr_lab_contract_applies_to_scouts_but_not_secondmates
+test_scaffolds_carry_task_token_exactly_once
 test_secondmate_no_projects_charter
 test_secondmate_marked_request_reporting_contract
 test_secondmate_directory_paths_are_absolute_and_output_is_stable
