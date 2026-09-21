@@ -465,7 +465,7 @@ test_scaffolds_carry_task_token_exactly_once() {
     filled=$(sed "s/{TASK}/$marker/g" "$brief")
     count=$(printf '%s\n' "$filled" | grep -o "$marker" | wc -l | tr -d ' ')
     [ "$count" = "$want" ] || fail "$id: filled task appeared $count times, expected $want"
-    case "$variant" in
+    case "${variant%%:*}" in
       ship-nm|ship-dp|ship-lo|scout)
         printf '%s\n' "$filled" | grep -qF "this scaffold cannot inspect the task text that replaces the task placeholder above later." \
           || fail "$id: Herdr safety-gate sentence not intact after fill"
