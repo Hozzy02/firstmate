@@ -444,12 +444,12 @@ test_herdr_lab_omission_is_loud_for_ship_and_scout() {
 # middle of the Herdr safety gate.
 test_scaffolds_carry_task_token_exactly_once() {
   local home id brief count marker filled variant repo want
-  home="$TMP_ROOT/task-token-home"
-  mkdir -p "$home/data"
   for variant in "ship-nm:--mode no-mistakes" "ship-dp:--mode direct-PR" "ship-lo:--mode local-only" \
     "ship-nm-lab:--mode no-mistakes --herdr-lab" "scout:--scout" "scout-lab:--scout --herdr-lab" \
     "second:--secondmate --no-projects"; do
     id="brief-token-${variant%%:*}"
+    home="$TMP_ROOT/task-token-home-${variant%%:*}"
+    mkdir -p "$home/data"
     repo=firstmate
     case "$variant" in second:*) repo= ;; esac
     # shellcheck disable=SC2086  # variant flags and the optional repo are deliberately word-split
