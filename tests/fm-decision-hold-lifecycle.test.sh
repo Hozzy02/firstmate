@@ -770,8 +770,28 @@ test_unanswered_decision_still_blocks_completion_and_teardown() {
   pass "an unanswered decision still blocks completion and resists both unrouted close paths"
 }
 
-test_uninventoried_report_decision_refuses_completion
+test_parenthesized_reason_is_substituted_for_tasks_axi() {
+  local home id hold show
+  home=$(make_home paren-reason)
+  id=sample-merge-review
+  tasks_in "$home" add "$id" "Review the sample merges" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create parenthesized-reason origin fixture"
+  write_origin_meta "$home" "$id"
+  hold=$(run_decisions "$home" hold "$id" merges \
+    --title "Choose the sample merge follow-up" --reason "captain follow-up (merged PRs 5, 6) pending" \
+    --repo sample 2> "$home/paren-hold.err") \
+    || fail "natural parenthesized reason was rejected: $(cat "$home/paren-hold.err")"
+  [ "$hold" = "$id-decision-merges" ] || fail "parenthesized reason changed the hold identity: $hold"
+  show=$(tasks_in "$home" show "$hold") || fail "parenthesized-reason hold is absent"
+  assert_contains "$show" 'hold_reason: "captain follow-up [merged PRs 5, 6] pending"' \
+    "parentheses were not substituted with square brackets before tasks-axi"
+  run_decisions "$home" hold "$id" merges \
+    --title "Choose the sample merge follow-up" --reason "captain follow-up (merged PRs 5, 6) pending" \
+    --repo sample >/dev/null || fail "idempotent parenthesized-reason retry failed"
+  pass "hold substitutes reason parentheses with square brackets for tasks-axi"
+}
 
+test_uninventoried_report_decision_refuses_completion
 test_scout_teardown_always_requires_inventory_verification
 test_declined_decision_closes_without_routed_work
 test_out_of_band_close_is_repairable_before_teardown
@@ -783,3 +803,4 @@ test_none_inventory_and_resolved_prose_do_not_create_holds
 test_terminal_single_owner_status_decision_does_not_block_empty_inventory
 test_secondmate_hold_stays_in_authoritative_home
 test_resolve_matches_quoted_blocked_by_edges
+test_parenthesized_reason_is_substituted_for_tasks_axi
