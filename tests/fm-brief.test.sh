@@ -521,6 +521,32 @@ test_secondmate_no_projects_charter() {
   pass "fm-brief.sh: --no-projects scaffolds a project-less charter and guards misuse"
 }
 
+test_brevity_caps_in_every_variant() {
+  local home name flags brief
+  home="$TMP_ROOT/brevity-home"
+  mkdir -p "$home/data"
+  for name in ship scout second; do
+    case "$name" in
+      ship) flags="firstmate --mode no-mistakes" ;;
+      scout) flags="firstmate --scout" ;;
+      second) flags="--secondmate --no-projects" ;;
+    esac
+    # shellcheck disable=SC2086 # Intentional word splitting of flag fixtures.
+    FM_HOME="$home" FM_SECONDMATE_CHARTER='Handle routed work.' \
+      "$ROOT/bin/fm-brief.sh" "brev-$name" $flags >/dev/null 2>&1 \
+      || fail "brevity fixture $name scaffold failed"
+    brief="$home/data/brev-$name/brief.md"
+    assert_grep 'Status lines stay under 300 characters' "$brief" "$name brief lost the status-line cap"
+    assert_grep 'at most 3 prose body lines' "$brief" "$name brief lost the commit-body cap"
+    assert_grep 'git trailers sit outside the cap' "$brief" "$name brief lost the trailer exemption"
+    assert_grep 'at most 5 lines plus the attribution footer' "$brief" "$name brief lost the PR cap"
+    assert_grep 'Do not narrate routine progress' "$brief" "$name brief lost the no-narration rule"
+  done
+  assert_grep 'the main firstmate sends `/clear`' "$home/data/brev-second/brief.md" \
+    "secondmate charter lost the idle-then-/clear rule"
+  pass "fm-brief.sh: every variant carries the brevity caps; charter carries the /clear rule"
+}
+
 test_secondmate_marked_request_reporting_contract() {
   local home brief
   home="$TMP_ROOT/marked-request-reporting-home"
@@ -762,6 +788,7 @@ test_herdr_lab_omission_is_loud_for_ship_and_scout
 test_herdr_lab_contract_applies_to_scouts_but_not_secondmates
 test_scaffolds_carry_task_token_exactly_once
 test_secondmate_no_projects_charter
+test_brevity_caps_in_every_variant
 test_secondmate_marked_request_reporting_contract
 test_secondmate_directory_paths_are_absolute_and_output_is_stable
 test_pause_verb_override_renders_all_brief_scaffolds
