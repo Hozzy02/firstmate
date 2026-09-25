@@ -228,6 +228,7 @@ It never initiates a survey or audit during recovery.
 
 A secondmate is persistent by default.
 An empty queue is healthy and does not trigger teardown.
+Once a secondmate's queue is empty and its children are torn down, the main firstmate sends it `/clear` with `bin/fm-send.sh`, because a secondmate cannot self-issue it (captain token-economy rule 2 in `data/captain.md`).
 Run `bin/fm-teardown.sh <id>` for `kind=secondmate` only when the captain or main firstmate explicitly decides to retire that persistent second mate.
 
 The safety check is the secondmate's own home.
