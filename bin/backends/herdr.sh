@@ -1921,9 +1921,72 @@ fm_backend_herdr_tab_is_husk() {  # <session> <pane_id>
   esac
 }
 
+# fm_backend_herdr_pane_idle_subshell_sample: one strict observation that the
+# pane foreground is exactly one idle recognized shell that is NOT the pane's
+# own shell but a descendant of it reached only through shells and the
+# `treehouse` launcher (the worktree subshell `treehouse get` leaves behind
+# when a worker exits back to its prompt).
+# The process-group leader, sole foreground process, name and argv0 agreement,
+# childless, and sleeping conditions match the idle-shell proof, and any other
+# process in the ancestor chain, such as a harness, refuses.
+# It never prints a pid a caller could signal, so it is only an agent-free
+# proof and never a pane-death proof.
+fm_backend_herdr_pane_idle_subshell_sample() {  # <session> <pane-id>
+  local session=$1 pane=$2 info shell_pid fg_pid name argv0 ps_bin rows stat
+  local cur depth=0 comm
+  info=$(fm_backend_herdr_cli "$session" pane process-info --pane "$pane" 2>/dev/null) || return 1
+  printf '%s' "$info" | jq -e --arg pane "$pane" '
+    .result.type == "pane_process_info"
+    and .result.process_info.pane_id == $pane
+    and (.result.process_info.foreground_processes | type == "array" and length == 1)
+  ' >/dev/null 2>&1 || return 1
+  shell_pid=$(printf '%s' "$info" | jq -er \
+    '.result.process_info.shell_pid | select(type == "number" and . > 1) | floor' 2>/dev/null) || return 1
+  fg_pid=$(printf '%s' "$info" | jq -er \
+    '.result.process_info.foreground_processes[0].pid | select(type == "number" and . > 1) | floor' 2>/dev/null) || return 1
+  [ "$fg_pid" != "$shell_pid" ] || return 1
+  [ "$(printf '%s' "$info" | jq -er \
+    '.result.process_info.foreground_process_group_id | select(type == "number") | floor' 2>/dev/null)" = "$fg_pid" ] || return 1
+  name=$(printf '%s' "$info" | jq -er \
+    '.result.process_info.foreground_processes[0].name | select(type == "string" and length > 0)' 2>/dev/null) || return 1
+  argv0=$(printf '%s' "$info" | jq -er '
+    .result.process_info.foreground_processes[0] as $process
+    | ($process.argv0 // $process.argv[0])
+    | select(type == "string" and length > 0)
+  ' 2>/dev/null) || return 1
+  name=${name##*/}
+  argv0=${argv0#-}
+  argv0=${argv0##*/}
+  [ "$argv0" = "$name" ] || return 1
+  case "$name" in sh|bash|zsh|dash|ksh|fish) ;; *) return 1 ;; esac
+
+  ps_bin=${FM_HERDR_PS_BIN:-ps}
+  command -v "$ps_bin" >/dev/null 2>&1 || return 1
+  rows=$("$ps_bin" -axo pid=,ppid= 2>/dev/null) || return 1
+  printf '%s\n' "$rows" | awk -v fg="$fg_pid" '
+    $1 == fg { found++ }
+    $2 == fg { child++ }
+    END { exit(found == 1 && child == 0 ? 0 : 1) }
+  ' || return 1
+  stat=$("$ps_bin" -p "$fg_pid" -o stat= 2>/dev/null | tr -d '[:space:]') || return 1
+  case "$stat" in S*|I*) ;; *) return 1 ;; esac
+  cur=$(printf '%s\n' "$rows" | awk -v p="$fg_pid" '$1 == p { print $2; exit }')
+  while [ "$cur" != "$shell_pid" ]; do
+    depth=$((depth + 1))
+    [ "$depth" -le 4 ] && [ -n "$cur" ] && [ "$cur" -gt 1 ] 2>/dev/null || return 1
+    comm=$("$ps_bin" -p "$cur" -o comm= 2>/dev/null | tr -d '[:space:]') || return 1
+    comm=${comm#-}
+    comm=${comm##*/}
+    case "$comm" in sh|bash|zsh|dash|ksh|fish|treehouse) ;; *) return 1 ;; esac
+    cur=$(printf '%s\n' "$rows" | awk -v p="$cur" '$1 == p { print $2; exit }')
+  done
+  fm_backend_herdr_pid_is_bare_shell "$ps_bin" "$shell_pid"
+}
+
 # fm_backend_herdr_pane_exited_opencode: succeed only when <pane_id> still
 # reads as a registered idle or done opencode agent while the pane provably
-# holds one lone idle shell and no opencode process.
+# holds one lone idle shell (the pane's own, or the worktree subshell under it)
+# and no opencode process.
 # opencode's hook-driven lifecycle authority can outlive the process itself, so
 # the registered agent is a stale record, not a live worker (`agent explain`
 # keeps saying idle with screen_detection_skip_reason
@@ -1942,7 +2005,8 @@ fm_backend_herdr_pane_exited_opencode() {  # <session> <pane_id>
     and .result.agent.agent == "opencode"
     and (.result.agent.agent_status == "idle" or .result.agent.agent_status == "done")
   ' >/dev/null 2>&1 || return 1
-  fm_backend_herdr_pane_idle_shell_pid "$session" "$pane_id" >/dev/null
+  fm_backend_herdr_pane_idle_shell_pid "$session" "$pane_id" >/dev/null \
+    || fm_backend_herdr_pane_idle_subshell_sample "$session" "$pane_id"
 }
 
 # fm_backend_herdr_agent_state: recovery-grade state for the same session-start

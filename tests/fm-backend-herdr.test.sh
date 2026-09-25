@@ -4342,23 +4342,42 @@ test_wait_transition_clean_timeout_returns_1() {
 
 # herdr_agent_state_verdict: run fm_backend_herdr_agent_state against a fake
 # herdr CLI answering pane get, agent get, and pane process-info from the given
-# agent name, agent status, and foreground process name (an argv0 of the
-# process name, pid 67 when it is the pane's shell), with a fake ps that shows
-# the lone shell asleep with no children.
-herdr_agent_state_verdict() {  # <agent> <agent_status> <foreground-name>
-  local agent=$1 status=$2 fg=$3 dir ps
-  dir="$TMP_ROOT/agent-state-$agent-$status-$fg"; mkdir -p "$dir"
-  ps="$dir/fake-ps"
-  cat > "$ps" <<'SH'
+# agent name, agent status, and foreground process name, plus a fake ps that
+# models one of these pane topologies (pane shell is pid 67):
+#   own          the foreground is the pane shell itself
+#   treehouse    the foreground is a zsh (pid 69) under a `treehouse` launcher
+#                (pid 68) under the pane shell, the layout `treehouse get`
+#                leaves after a worker exits
+#   harness-tree the same zsh, but the launcher in between is opencode
+#   busy-tree    the treehouse layout, but the foreground zsh has a child
+verdict_topology_ps() {  # <topology> <dir> -> echoes the fake ps path
+  local topology=$1 ps="$2/fake-ps-$1"
+  cat > "$ps" <<SH
 #!/usr/bin/env bash
-case "$*" in
-  "-axo pid=,ppid=") printf '1 0\n67 1\n' ;;
-  "-p 67 -o stat=") printf 'Ss\n' ;;
+topology=$topology
+case "\$*" in
+  "-axo pid=,ppid=")
+    case "\$topology" in
+      own) printf '1 0\\n67 1\\n' ;;
+      busy-tree) printf '1 0\\n67 1\\n68 67\\n69 68\\n70 69\\n' ;;
+      *) printf '1 0\\n67 1\\n68 67\\n69 68\\n' ;;
+    esac ;;
+  "-p 67 -o stat="|"-p 69 -o stat=") printf 'Ss\\n' ;;
+  "-p 67 -o comm=") printf -- '-zsh\\n' ;;
+  "-p 68 -o comm=")
+    if [ "\$topology" = harness-tree ]; then printf 'opencode\\n'; else printf 'treehouse\\n'; fi ;;
   *) exit 1 ;;
 esac
 SH
   chmod +x "$ps"
-  ROOT="$ROOT" AGENT=$agent STATUS=$status FG=$fg FM_HERDR_PS_BIN="$ps" \
+  printf '%s' "$ps"
+}
+
+herdr_agent_state_verdict() {  # <agent> <agent_status> <foreground-name> [<topology>]
+  local agent=$1 status=$2 fg=$3 topology=${4:-own} dir ps
+  dir="$TMP_ROOT/agent-state-$agent-$status-$fg-$topology"; mkdir -p "$dir"
+  ps=$(verdict_topology_ps "$topology" "$dir")
+  ROOT="$ROOT" AGENT=$agent STATUS=$status FG=$fg TOPOLOGY=$topology FM_HERDR_PS_BIN="$ps" \
     FM_BACKEND_HERDR_IDLE_SHELL_PROOF_POLLS=1 bash -c '
     . "$ROOT/bin/backends/herdr.sh"
     fm_backend_herdr_cli() {
@@ -4366,7 +4385,9 @@ SH
         "pane get") printf "{\"result\":{\"pane\":{\"pane_id\":\"w1:p1\"}}}\n" ;;
         "agent get") printf "{\"result\":{\"agent\":{\"pane_id\":\"w1:p1\",\"agent\":\"%s\",\"agent_status\":\"%s\"}}}\n" "$AGENT" "$STATUS" ;;
         "pane process-info")
-          if [ "$FG" = zsh ]; then pid=67; else pid=68; fi
+          if [ "$FG" != zsh ]; then pid=68
+          elif [ "$TOPOLOGY" = own ]; then pid=67
+          else pid=69; fi
           printf "{\"result\":{\"type\":\"pane_process_info\",\"process_info\":{\"pane_id\":\"w1:p1\",\"shell_pid\":67,\"foreground_process_group_id\":%s,\"foreground_processes\":[{\"argv\":[\"%s\"],\"argv0\":\"%s\",\"name\":\"%s\",\"pid\":%s}]}}}\n" "$pid" "$FG" "$FG" "$FG" "$pid" ;;
       esac
     }
@@ -4392,6 +4413,23 @@ test_agent_state_live_idle_opencode_stays_alive() {
   pass "herdr agent_state: a genuinely live idle opencode stays alive"
 }
 
+test_agent_state_exited_opencode_in_treehouse_subshell_reads_dead() {
+  local status
+  for status in idle "done"; do
+    [ "$(herdr_agent_state_verdict opencode "$status" zsh treehouse)" = dead ] \
+      || fail "a $status opencode whose foreground is the idle treehouse subshell must read agent-free"
+  done
+  [ "$(herdr_agent_state_verdict opencode idle opencode treehouse)" = alive ] \
+    || fail "a live opencode under the treehouse layout must stay alive"
+  [ "$(herdr_agent_state_verdict opencode idle zsh harness-tree)" = alive ] \
+    || fail "a shell under a harness process must not read agent-free"
+  [ "$(herdr_agent_state_verdict opencode idle zsh busy-tree)" = alive ] \
+    || fail "a subshell with a running child must not read agent-free"
+  [ "$(herdr_agent_state_verdict claude idle zsh treehouse)" = alive ] \
+    || fail "a non-opencode harness must keep its verdict under the treehouse layout"
+  pass "herdr agent_state: an exited opencode's idle treehouse subshell reads dead while live, harness-parented, busy, and non-opencode cases stay alive"
+}
+
 test_agent_state_stale_reclassification_is_opencode_and_idle_only() {
   [ "$(herdr_agent_state_verdict opencode working zsh)" = alive ] \
     || fail "a working opencode must never be reclassified"
@@ -4408,6 +4446,7 @@ test_agent_state_stale_reclassification_is_opencode_and_idle_only() {
 test_version_check_accepts_current_protocol
 test_agent_state_exited_opencode_with_stale_idle_registration_reads_dead
 test_agent_state_live_idle_opencode_stays_alive
+test_agent_state_exited_opencode_in_treehouse_subshell_reads_dead
 test_agent_state_stale_reclassification_is_opencode_and_idle_only
 test_version_check_refuses_old_protocol
 test_version_check_refuses_missing_herdr
