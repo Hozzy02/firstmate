@@ -882,6 +882,96 @@ test_exited_declared_pause_is_bounded_but_live_gate_surfaces() {
   pass "exited declared-pause and captain-held panes use bounded pause cadence while a live decision gate still surfaces once"
 }
 
+# --- backlog hold (tasks-axi hold): surfaced once, never wedge-escalated -----
+# A live worker parked by a backlog dispatch hold has no paused: status line, so
+# before the hold was consulted every unchanged-hash re-arm after the first
+# surface escalated a possible wedge, up to demand-deep-inspection.
+# task_is_backlog_held reads the real tasks-axi verdict, so these cases need it.
+seed_backlog_task() {  # <home> <id> <held:0|1> [hold flags...]
+  local home=$1 id=$2 held=$3
+  shift 3
+  mkdir -p "$home/data"
+  printf '# Backlog\n' > "$home/data/backlog.md"
+  (cd "$home" && tasks-axi add "$id" "parked task" --start >/dev/null) || return 1
+  [ "$held" -eq 1 ] || return 0
+  (cd "$home" && tasks-axi hold "$id" --reason "waiting on another fix" "$@" >/dev/null)
+}
+
+test_task_is_backlog_held_classifier() {
+  local dir
+  if ! command -v tasks-axi >/dev/null 2>&1; then
+    printf 'skip: tasks-axi not found (task_is_backlog_held reads its verdict)\n'
+    return 0
+  fi
+  dir=$(make_case classify-backlog-held)
+  seed_backlog_task "$dir/held" parked 1 --kind captain || fail "could not seed a held backlog item"
+  seed_backlog_task "$dir/free" parked 0 || fail "could not seed an unheld backlog item"
+  seed_backlog_task "$dir/expired" parked 1 --until 2000-01-01 || fail "could not seed an expired hold"
+  task_is_backlog_held "$dir/held" parked || fail "an active captain hold was not read as held"
+  task_is_backlog_held "$dir/free" parked && fail "an unheld in-flight item was read as held"
+  task_is_backlog_held "$dir/expired" parked && fail "a hold past its until date was read as held"
+  task_is_backlog_held "$dir/held" absent-id && fail "an unknown task id was read as held"
+  task_is_backlog_held "$dir/no-such-home" parked && fail "a missing home was read as held"
+  pass "task_is_backlog_held follows tasks-axi's active-hold verdict and fails toward not held"
+}
+
+# Drive one live-agent, not-working, non-terminal stale pane through its first
+# surface and then an unchanged-hash re-arm whose wedge timer is already past the
+# threshold. Prints "escalated" when the re-arm wedge-escalates, else "absorbed".
+backlog_hold_rearm_outcome() {  # <case-name> <held:0|1>
+  local dir state fakebin out capture_file window key pane_hash sig pid
+  dir=$(make_case "$1"); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-parked"
+  seed_backlog_task "$dir" parked "$2" --kind captain || fail "could not seed backlog for $1"
+  printf 'idle prompt, parked on another fix\n' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=grok\nbackend=tmux\n' "$window" > "$state/parked.meta"
+  printf 'working: implementing\n' > "$state/parked.status"
+  sig=$(seen_sig "$state/parked.status"); printf '%s' "$sig" > "$state/.seen-parked_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle prompt, parked on another fix")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+
+  PATH="$fakebin:$PATH" FM_HOME="$dir" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=grok FM_FAKE_CREW_STATE='state: unknown · source: none · no current-state source available' \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "$1: the first idle sight did not surface once"
+  grep -Fx "stale: $window" "$out" >/dev/null || fail "$1: the first surface was not a plain stale wake"
+  ack_stopped_cycle "$state" || fail "$1: could not acknowledge the first surface"
+
+  printf '%s\n' $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_HOME="$dir" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=grok FM_FAKE_CREW_STATE='state: unknown · source: none · no current-state source available' \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if wait_live "$pid" 30; then
+    reap "$pid"
+    [ -e "$state/.paused-$key" ] || fail "$1: absorbed re-arm did not keep the pause cadence marker"
+    [ ! -e "$state/.stale-since-$key" ] || fail "$1: absorbed re-arm kept the wedge timer"
+    printf 'absorbed\n'
+  else
+    grep -F "possible wedge" "$out" >/dev/null || fail "$1: re-arm exited without a wedge escalation: $(cat "$out")"
+    printf 'escalated\n'
+  fi
+}
+
+test_backlog_held_stale_never_wedge_escalates() {
+  local held free
+  if ! command -v tasks-axi >/dev/null 2>&1; then
+    printf 'skip: tasks-axi not found (backlog-hold stale triage reads its verdict)\n'
+    return 0
+  fi
+  free=$(backlog_hold_rearm_outcome backlog-unheld-stale 0) || exit 1
+  [ "$free" = escalated ] || fail "control: an unheld stuck worker no longer wedge-escalates (got $free)"
+  held=$(backlog_hold_rearm_outcome backlog-held-stale 1) || exit 1
+  [ "$held" = absorbed ] || fail "a backlog-held worker still wedge-escalated after its first surface (got $held)"
+  pass "a backlog-held idle worker surfaces once and is not wedge-escalated, while an unheld one still is"
+}
+
 test_secondmate_paused_resurfaces_in_normal_mode() {
   local dir state fakebin out capture_file statusf window key pane_hash sig pid back
   dir=$(make_case secondmate-paused-resurface); state="$dir/state"; fakebin="$dir/fakebin"
@@ -1955,6 +2045,8 @@ test_busy_pane_default_turn_age_bound_is_3600s
 test_nonterminal_stale_not_working_surfaced
 test_nonterminal_stale_paused_absorbed_then_resurfaced
 test_exited_declared_pause_is_bounded_but_live_gate_surfaces
+test_task_is_backlog_held_classifier
+test_backlog_held_stale_never_wedge_escalates
 test_secondmate_paused_resurfaces_in_normal_mode
 test_secondmate_nonpaused_stale_remains_suppressed
 test_secondmate_unpause_clears_pause_tracking

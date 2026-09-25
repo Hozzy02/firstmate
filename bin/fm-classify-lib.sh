@@ -144,6 +144,18 @@ status_is_paused_or_captain_held() {  # <status-line>
   [ "$verb" = "${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}" ]
 }
 
+# 0 if <task> carries an active backlog dispatch hold (tasks-axi hold) in
+# <fm-home>'s backlog. A held item is parked on purpose even though its status
+# log never says so, so its idle pane is expected like a declared pause.
+# tasks-axi's own `show` verdict is read so hold-until expiry keeps one owner.
+# Any read failure (tool absent, unknown id) returns 1, keeping wedge escalation.
+task_is_backlog_held() {  # <fm-home> <task>
+  local out
+  command -v tasks-axi >/dev/null 2>&1 || return 1
+  out=$(cd "$1" 2>/dev/null && tasks-axi show "$2" 2>/dev/null) || return 1
+  printf '%s\n' "$out" | grep -qx '  held: yes'
+}
+
 # --- durable keyed decisions ------------------------------------------------
 #
 # The status stream is an append-only EVENT log. Reading it last-event-wins
