@@ -14,6 +14,9 @@
 #   4. The --key path never carries the marker.
 #   5. Direct captain text stays unmarked, and already-marked text is idempotent.
 #   6. The marker is the label plus terminal-safe U+2063 INVISIBLE SEPARATOR.
+#   7. A harness slash command (and a codex `$skill` invocation) to a secondmate
+#      selector is sent unmarked with no pending-reply record, while path-like
+#      or `$`-led ordinary text stays marked.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -253,8 +256,67 @@ test_marked_send_preserves_trailing_newlines() {
   pass "fm-send: marked secondmate payload preserves trailing newline bytes"
 }
 
+# expect_unmarked_no_record <fakebin> <home> <log> <target> <text> <why>
+expect_unmarked_no_record() {
+  local fb=$1 home=$2 log=$3 target=$4 text=$5 why=$6 rc got
+  run_send "$fb" "$home" "$log" "$target" "$text"; rc=$?
+  expect_code 0 "$rc" "$why should succeed"
+  got=$(cat "$log")
+  [ "$got" = "$text" ] \
+    || fail "$why: expected the bare command, got"$'\n'"--- bytes ---"$'\n'"$(printf '%s' "$got" | od -An -c)"
+  if [ -d "$home/state/pending-replies" ] && [ -n "$(ls -A "$home/state/pending-replies")" ]; then
+    fail "$why: an unmarked harness command must not create a pending-reply record"
+  fi
+}
+
+# expect_marked <fakebin> <home> <log> <target> <text> <why>
+expect_marked() {
+  local fb=$1 home=$2 log=$3 target=$4 text=$5 why=$6 rc got
+  run_send "$fb" "$home" "$log" "$target" "$text"; rc=$?
+  expect_code 0 "$rc" "$why should succeed"
+  got=$(cat "$log")
+  case "$got" in
+    "$FM_FROMFIRST_MARK"corr=*"$text") : ;;
+    *) fail "$why: ordinary text should stay marked"$'\n'"--- bytes ---"$'\n'"$(printf '%s' "$got" | od -An -c)" ;;
+  esac
+}
+
+test_secondmate_slash_command_is_unmarked() {
+  local dir fb log home
+  dir="$TMP_ROOT/sm-slash"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); log="$dir/send.log"
+  home=$(setup_home sm-slash)
+  fm_write_secondmate_meta "$home/state/domain.meta" "$home" "sess:fm-domain" alpha claude
+  expect_unmarked_no_record "$fb" "$home" "$log" "domain" "/clear" "exact-id /clear to a secondmate"
+  expect_unmarked_no_record "$fb" "$home" "$log" "fm-domain" "/no-mistakes ship it" "stable-label slash command with args"
+  expect_unmarked_no_record "$fb" "$home" "$log" "domain" "/plugin:skill-name" "namespaced slash command"
+  home=$(setup_home sm-slash-text)
+  fm_write_secondmate_meta "$home/state/domain.meta" "$home" "sess:fm-domain" alpha claude
+  expect_marked "$fb" "$home" "$log" "domain" "/tmp/build.log shows the failure" "absolute-path text"
+  expect_marked "$fb" "$home" "$log" "domain" "/Clear the queue" "capitalized slash-led text"
+  expect_marked "$fb" "$home" "$log" "domain" "\$no-mistakes on claude" "a \$ token to a non-codex secondmate"
+  pass "fm-send: a slash command to a secondmate is sent unmarked with no pending reply, while slash-led text stays marked"
+}
+
+test_codex_secondmate_skill_invocation_is_unmarked() {
+  local dir fb log home
+  dir="$TMP_ROOT/sm-codex"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); log="$dir/send.log"
+  home=$(setup_home sm-codex)
+  fm_write_secondmate_meta "$home/state/domain.meta" "$home" "sess:fm-domain" alpha codex
+  expect_unmarked_no_record "$fb" "$home" "$log" "domain" "\$no-mistakes" "codex \$skill invocation"
+  expect_unmarked_no_record "$fb" "$home" "$log" "domain" "/compact" "codex slash command"
+  home=$(setup_home sm-codex-text)
+  fm_write_secondmate_meta "$home/state/domain.meta" "$home" "sess:fm-domain" alpha codex
+  expect_marked "$fb" "$home" "$log" "domain" "\$5/month is the budget" "\$-amount text to codex"
+  expect_marked "$fb" "$home" "$log" "domain" "\$HOME is wrong" "\$HOME text to codex"
+  pass "fm-send: a codex \$skill invocation to a secondmate is unmarked, while \$-led text stays marked"
+}
+
 test_secondmate_target_is_marked
 test_exact_secondmate_task_id_is_marked
+test_secondmate_slash_command_is_unmarked
+test_codex_secondmate_skill_invocation_is_unmarked
 test_crewmate_target_is_not_marked
 test_explicit_window_is_not_marked
 test_key_path_is_not_marked

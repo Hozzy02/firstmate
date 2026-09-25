@@ -27,7 +27,12 @@
 # routes its reply via its status file or a status-pointed doc instead of
 # stranding it in chat the main firstmate never reads. A crewmate/scout target,
 # an explicit backend-target escape-hatch target, and the --key path are never
-# marked - their behavior is unchanged.
+# marked - their behavior is unchanged. A harness command to a secondmate - a
+# slash command (`/clear`), or a `$skill` invocation to a codex target - is
+# also sent unmarked, exactly like the explicit-target path, so its harness
+# runs it instead of receiving it as chat; it creates no pending-reply
+# expectation. Only a leading command token (lowercase first character, ending
+# at whitespace) qualifies, so an absolute path or `$HOME` stays marked text.
 #
 # Parent-owned pending-reply expectation: every newly marked secondmate request
 # also receives a privacy-safe correlation id and a durable parent record under
@@ -334,11 +339,41 @@ fi
 # secondmate then routes its reply via the status path (see fm-marker-lib.sh).
 # An explicit backend target (the escape hatch for endpoints outside this home)
 # and any crewmate/scout target are left unmarked, and so is the --key path.
+# A harness command is also left unmarked, because the carrier would turn it
+# into chat the secondmate reasons about instead of a command its harness runs.
 MARK_FROM_FIRSTMATE=0
 PENDING_REPLY_CORR=
 PENDING_REPLY_CREATED=0
 TARGET_TASK_ID=
-if [ -n "$TARGET_SELECTOR" ] && [ -n "$TARGET_META" ] && [ "$(fm_meta_get "$TARGET_META" kind)" = secondmate ]; then
+
+# fm_send_is_harness_command <text>: true when the text is a harness slash
+# command (`/clear`, `/no-mistakes args`) or, for a codex target, a `$skill`
+# invocation. The command token must start lowercase and end at whitespace or
+# end of text, so an absolute path (`/tmp/x`), `$5/month`, or `$HOME` stays
+# ordinary text.
+fm_send_is_harness_command() {  # <text>
+  local text=$1 lead token
+  lead=${text%"${text#?}"}
+  case "$lead" in
+    /) : ;;
+    \$) [ "$TARGET_HARNESS" = codex ] || return 1 ;;
+    *) return 1 ;;
+  esac
+  token=${text#?}
+  token=${token%%[[:space:]]*}
+  # Explicit character lists: a locale-collated [a-z] range can match uppercase.
+  case "$token" in
+    [abcdefghijklmnopqrstuvwxyz]*) : ;;
+    *) return 1 ;;
+  esac
+  case "$token" in
+    *[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-]*) return 1 ;;
+  esac
+  return 0
+}
+
+if [ -n "$TARGET_SELECTOR" ] && [ -n "$TARGET_META" ] && [ "$(fm_meta_get "$TARGET_META" kind)" = secondmate ] \
+  && ! fm_send_is_harness_command "$*"; then
   MARK_FROM_FIRSTMATE=1
   TARGET_TASK_ID=$(fm_send_id_from_meta "$TARGET_META")
 fi
