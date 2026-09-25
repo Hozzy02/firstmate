@@ -140,7 +140,19 @@ if ! fm_lock_set_role "$OWNER_LOCK" autoarm; then
   fm_lock_release "$OWNER_LOCK"
   exit 0
 fi
-trap 'fm_lock_release "$OWNER_LOCK"' EXIT
+# Claude ends this hook by signalling its process group (turn, session, or
+# timeout teardown). Default TERM disposition would skip the EXIT trap and leave
+# the owner lock and the arm's captured output behind, so convert HUP/INT/TERM
+# into an ordinary exit that runs the cleanup below.
+OUT=
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+autoarm_cleanup() {
+  [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
+  fm_lock_release "$OWNER_LOCK"
+}
+trap autoarm_cleanup EXIT
+trap 'exit 143' HUP TERM
+trap 'exit 130' INT
 
 write_epoch() {  # <outcome>
   local outcome=$1 seq tmp
@@ -170,7 +182,6 @@ write_epoch arming
 # Every non-actionable close is checked against the same identity-matched live
 # watcher and fresh-beacon predicate used by the turn-end guard before it is
 # retried or translated into an operator-visible failure.
-OUT=
 ACTIONABLE=0
 HEALTHY=0
 attempt=0

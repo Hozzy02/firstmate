@@ -383,6 +383,65 @@ test_autoarm_stale_episode_is_stable() {
   pass "fm-guard stale banner: auto-arm stale episode stays one episode across calls"
 }
 
+# Backdate a path's mtime by <age> seconds (BSD date -r, then GNU date -d).
+backdate() {  # <path> <age-seconds>
+  local t stamp
+  t=$(( $(date +%s) - $2 ))
+  stamp=$(date -r "$t" +%Y%m%d%H%M.%S 2>/dev/null || date -d "@$t" +%Y%m%d%H%M.%S)
+  touch -t "$stamp" "$1"
+}
+
+write_autoarm_epoch() {  # <dir> <outcome> [age-seconds]
+  local dir=$1 outcome=$2 age=${3:-0} epoch
+  epoch="$(case_home "$dir")/state/.claude-autoarm-epoch"
+  printf 'epoch=1 owner_pid=1 outcome=%s updated_at=%s\n' "$outcome" "$(date +%s)" > "$epoch"
+  [ "$age" -eq 0 ] || backdate "$epoch" "$age"
+}
+
+test_autoarm_stale_beacon_is_healthy_while_stop_handoff_pending() {
+  local dir out
+  dir=$(make_guard_case autoarm-handoff-rewake)
+  # The hook exited 2 to hand a wake to a long model turn: no watcher runs for the
+  # whole turn, so a beacon far past grace is the designed state, not a lapse.
+  : > "$(case_home "$dir")/state/.last-watcher-beat"
+  backdate "$(case_home "$dir")/state/.last-watcher-beat" 100000
+  write_autoarm_epoch "$dir" rewake
+  out=$(run_guard_case_autoarm "$dir")
+  [ -z "$out" ] || fail "auto-arm hand-off (rewake) with a stale beacon must stay silent, got: $out"
+  write_autoarm_epoch "$dir" arming
+  out=$(run_guard_case_autoarm "$dir")
+  [ -z "$out" ] || fail "auto-arm hook that was signalled mid-arm (no live owner) must stay silent, got: $out"
+  pass "fm-guard stale banner: auto-arm stale beacon is healthy while a Stop-owned hand-off is pending"
+}
+
+test_autoarm_handoff_does_not_mask_real_lapses() {
+  local dir home out
+  dir=$(make_guard_case autoarm-handoff-lapse)
+  home=$(case_home "$dir")
+  : > "$home/state/.last-watcher-beat"
+  backdate "$home/state/.last-watcher-beat" 100000
+  # A failed auto-arm is a real lapse.
+  write_autoarm_epoch "$dir" failed
+  out=$(run_guard_case_autoarm "$dir")
+  [ "$(count_text "$out" "WATCHER DOWN - SUPERVISION IS OFF")" -eq 1 ] \
+    || fail "a failed auto-arm outcome must still alarm: $out"
+  rm -f "$home/state/.guard-watcher-stale-banner"
+  # A hand-off older than the hold window is a lapse nothing completed.
+  write_autoarm_epoch "$dir" rewake 120
+  out=$(FM_AUTOARM_HANDOFF_HOLD=60 run_guard_case_autoarm "$dir")
+  [ "$(count_text "$out" "WATCHER DOWN - SUPERVISION IS OFF")" -eq 1 ] \
+    || fail "an expired hand-off must alarm: $out"
+  rm -f "$home/state/.guard-watcher-stale-banner"
+  # A live hook owner holding the lock with a dead beacon is a wedged arm.
+  write_autoarm_epoch "$dir" arming
+  mkdir -p "$home/state/.claude-autoarm.lock"
+  printf '%s\n' "$$" > "$home/state/.claude-autoarm.lock/pid"
+  out=$(run_guard_case_autoarm "$dir")
+  [ "$(count_text "$out" "WATCHER DOWN - SUPERVISION IS OFF")" -eq 1 ] \
+    || fail "a live hook owner with a stale beacon must alarm: $out"
+  pass "fm-guard stale banner: a pending hand-off never masks failed, expired, or wedged auto-arm"
+}
+
 test_persistent_no_watcher_banner_names_missing_process() {
   local dir out
   dir=$(make_guard_case persistent-no-watcher-reason)
@@ -695,6 +754,8 @@ test_extension_live_watcher_is_healthy_without_ownership_evidence
 test_autoarm_fresh_beacon_without_watcher_is_healthy
 test_autoarm_stale_beacon_alarms_with_correct_reason
 test_autoarm_stale_episode_is_stable
+test_autoarm_stale_beacon_is_healthy_while_stop_handoff_pending
+test_autoarm_handoff_does_not_mask_real_lapses
 test_persistent_no_watcher_banner_names_missing_process
 test_persistent_no_watcher_episode_survives_beacon_touch
 test_fresh_beacon_without_live_watcher_stays_alarm

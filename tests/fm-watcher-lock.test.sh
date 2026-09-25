@@ -310,6 +310,77 @@ test_lock_live_steal_mutex_is_not_reclaimed() {
   pass "live steal mutex is not reclaimed"
 }
 
+# Every lock path under a state dir, so a runaway steal suffix is visible.
+lock_names() {  # <state> <prefix>
+  find "$1" -maxdepth 1 -name "$2*" -print | sed 's|.*/||'
+}
+
+test_lock_repeated_steals_keep_bounded_name() {
+  local dir state lockdir dead round stale
+  dir=$(make_case lock-steal-bounded)
+  state="$dir/state"
+  lockdir="$state/.bounded.lock"
+  dead=$(dead_pid)
+  # Each round leaves the lock held by a dead process plus a stale steal mutex,
+  # then steals it again from a fresh shell. The last round also seeds a legacy
+  # nested mutex left by an older runaway, which must be ignored, not extended.
+  for round in 1 2 3 4 5; do
+    rm -rf "$lockdir" "$lockdir.steal" "$lockdir.steal.steal"
+    mkdir "$lockdir" "$lockdir.steal"
+    printf '%s\n' "$dead" > "$lockdir/pid"
+    printf '%s\n' "$dead" > "$lockdir.steal/pid"
+    if [ "$round" -eq 5 ]; then
+      mkdir "$lockdir.steal.steal"
+      printf '%s\n' "$dead" > "$lockdir.steal.steal/pid"
+    fi
+    FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
+      . "$1"
+      fm_lock_try_acquire "$2" || exit 7
+    ' _ "$LIB" "$lockdir" || fail "round $round: stale lock with a stale steal mutex was not stolen"
+  done
+  stale=$(lock_names "$state" .bounded.lock | grep -c '\.steal\.steal\.steal' || true)
+  [ "$stale" -eq 0 ] || fail "a re-stolen lock grew a nested steal name: $(lock_names "$state" .bounded.lock | tr '\n' ' ')"
+  [ "$(lock_names "$state" .bounded.lock | awk '{ if (length($0) > n) n = length($0) } END { print n + 0 }')" -lt 40 ] \
+    || fail "lock names grew across repeated steals"
+  pass "repeated steals keep a bounded lock name"
+}
+
+test_lock_failed_create_does_not_recurse_into_steal_names() {
+  local dir state lockdir dead fakebin pid i names
+  dir=$(make_case lock-steal-no-runaway)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  lockdir="$state/.runaway.lock"
+  dead=$(dead_pid)
+  # A persistently failing create (mktemp cannot make the owner dir) used to
+  # re-enter the steal mutex on ever longer .steal.steal... names until the name
+  # exceeded the filesystem limit, wedging the caller.
+  printf '#!/bin/sh\nexit 1\n' > "$fakebin/mktemp"
+  chmod +x "$fakebin/mktemp"
+  mkdir "$lockdir"
+  printf '%s\n' "$dead" > "$lockdir/pid"
+  PATH="$fakebin:$PATH" FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_lock_try_acquire "$2" && exit 7
+    exit 0
+  ' _ "$LIB" "$lockdir" > /dev/null 2>&1 &
+  pid=$!
+  i=0
+  while [ "$i" -lt 100 ] && is_live_non_zombie "$pid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if is_live_non_zombie "$pid"; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    fail "a failing steal create recursed instead of returning"
+  fi
+  wait "$pid" || fail "acquire against an unstealable lock did not fail cleanly"
+  names=$(lock_names "$state" .runaway.lock | grep -c '\.steal\.steal' || true)
+  [ "$names" -eq 0 ] || fail "a failed create left nested steal names"
+  pass "a failing steal create returns instead of nesting steal names"
+}
+
 test_lock_does_not_steal_live_lock() {
   local dir state lockdir live out lockpid
   dir=$(make_case lock-live-noop)
@@ -1110,6 +1181,8 @@ test_lock_single_winner_under_concurrency
 test_lock_steals_dead_pid_lock
 test_lock_stale_steal_single_winner_under_concurrency
 test_lock_live_steal_mutex_is_not_reclaimed
+test_lock_repeated_steals_keep_bounded_name
+test_lock_failed_create_does_not_recurse_into_steal_names
 test_lock_does_not_steal_live_lock
 test_lock_empty_pid_uses_minimum_grace
 test_lock_late_claim_loses_after_recreate

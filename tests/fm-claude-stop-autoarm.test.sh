@@ -146,6 +146,14 @@ printf 'stale: fixture-win actionable\n'
 exit 0
 SH
       ;;
+    hang)
+      cat > "$dir/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s %s\n' "$$" "$PPID" > "$FM_HOME/state/arm-ran"
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+sleep 30
+SH
+      ;;
     *)
       echo "unknown arm fixture: $kind" >&2
       return 2
@@ -534,6 +542,38 @@ test_single_flight_admits_exactly_one_owner() {
   pass "auto-arm: concurrent firings admit one owner and one rewake translation"
 }
 
+test_signalled_hook_releases_owner_lock_and_output() {
+  local dir harness i arm_pid hook_pid
+  dir=$(make_primary_dir "$TMP_ROOT/signalled")
+  : > "$dir/state/task.meta"
+  write_arm_fixture "$dir" hang
+  FM_HOME="$dir" "$FAKE_CLAUDE" -c '
+    printf "%s\n" "$$" > "$FM_HOME/state/.lock"
+    printf "%s\n" "{\"session_id\":\"s\"}" | "$FM_HOME/bin/fm-claude-stop-autoarm.sh" >/dev/null 2>&1
+    echo $? > "$FM_HOME/state/hook-rc"
+  ' &
+  harness=$!
+  i=0
+  while [ "$i" -lt 100 ] && [ ! -s "$dir/state/arm-ran" ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -s "$dir/state/arm-ran" ] || { kill "$harness" 2>/dev/null; fail "hook never foregrounded the arm"; }
+  read -r arm_pid hook_pid < "$dir/state/arm-ran"
+  [ -d "$dir/state/.claude-autoarm.lock" ] || [ -L "$dir/state/.claude-autoarm.lock" ] \
+    || fail "hook did not hold its owner lock while the arm ran"
+  # Claude ends the hook by signalling its process group: arm and hook together.
+  kill -TERM "$arm_pid" "$hook_pid" 2>/dev/null || true
+  wait "$harness" 2>/dev/null || true
+  [ ! -e "$dir/state/.claude-autoarm.lock" ] && [ ! -L "$dir/state/.claude-autoarm.lock" ] \
+    || fail "a signalled hook left its owner lock behind"
+  ls "$dir"/state/.claude-autoarm-output.* >/dev/null 2>&1 \
+    && fail "a signalled hook leaked the arm's captured output"
+  [ "$(cat "$dir/state/hook-rc" 2>/dev/null)" = 143 ] \
+    || fail "a signalled hook must exit 143 without a rewake, got '$(cat "$dir/state/hook-rc" 2>/dev/null)'"
+  pass "auto-arm: a signalled hook releases its owner lock and output"
+}
+
 test_need_vanished_mid_cycle_closes_quietly() {
   local dir out status
   dir=$(make_primary_dir "$TMP_ROOT/vanished")
@@ -595,6 +635,7 @@ test_benign_cycle_end_with_live_watcher_is_silent
 test_positive_recovery_budget_contention_preserves_episode
 test_arms_for_x_mode_poll_need_without_inflight
 test_single_flight_admits_exactly_one_owner
+test_signalled_hook_releases_owner_lock_and_output
 test_need_vanished_mid_cycle_closes_quietly
 test_afk_mid_cycle_suppresses_rewake
 test_active_in_marked_secondmate_home
