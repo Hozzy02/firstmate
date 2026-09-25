@@ -27,6 +27,10 @@
 #   fm-decision-hold.sh decline <origin-id> <decision-key> --decision-file <path>
 #   fm-decision-hold.sh repair <origin-id> <decision-key> --decision-file <path>
 #
+# `hold` accepts natural --reason wording: because tasks-axi reserves parentheses
+# for markdown hold tags, it substitutes `(` and `)` with `[` and `]` before
+# handing the reason over, so "(merged PRs 5, 6)" is stored as "[merged PRs 5, 6]".
+#
 # `complete` is the shared investigation and visual-review completion gate.
 # `--none` is an explicit semantic attestation that the just-reviewed surface has
 # no unresolved captain decision. Later review passes may add keys; a live task's
@@ -357,7 +361,8 @@ command_hold() {
   validate_slug decision-key "$key"
   validate_one_line title "$title"
   validate_one_line reason "$reason"
-  case "$reason" in *'('*|*')'*) fail "reason must not contain parentheses (tasks-axi hold contract)" ;; esac
+  reason=${reason//\(/[}
+  reason=${reason//\)/]}
   require_tasks_axi
   origin_exists_here "$origin" || fail "origin $origin is not owned by the active home $FM_HOME"
   id=$(hold_id "$origin" "$key")
