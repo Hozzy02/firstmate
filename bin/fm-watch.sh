@@ -19,8 +19,9 @@
 #                          run-step or busy pane outranks even a captain-relevant log
 #                          line, since the crew's own log gets no new entry once
 #                          firstmate hands it to a no-mistakes validation. A declared
-#                          external-wait pause is absorbed instead with its own long
-#                          re-surface cadence, never as a wedge. Only when neither
+#                          external-wait pause, captain-held transfer, or active
+#                          backlog hold (tasks-axi hold) is absorbed instead with its
+#                          own long re-surface cadence, never as a wedge. Only when neither
 #                          absorb class applies does the log's last line decide:
 #                          terminal (captain-relevant) or non-terminal (no verb),
 #                          both surfaced at once. A provably-working stale past the
@@ -162,8 +163,9 @@ STALE_ESCALATE_SECS=${FM_STALE_ESCALATE_SECS:-240}  # idle secs before a provabl
 BUSY_TURN_MAX_SECS=${FM_BUSY_TURN_MAX_SECS:-3600}
 # A crew that declared a pause is idling on a known external wait, so its stale
 # pane is absorbed rather than wedge-escalated.
-# A captain-held or paused crew whose agent has confidently exited uses the same
-# bounded cadence, while a live or ambiguously read agent still surfaces once.
+# A captain-held, backlog-held (tasks-axi hold), or paused crew whose agent has
+# confidently exited uses the same bounded cadence, while a live or ambiguously
+# read agent still surfaces once and is never wedge-escalated afterwards.
 # These cases re-surface once for a recheck every PAUSE_RESURFACE_SECS - far
 # longer than the wedge threshold, but finite so a forgotten hold cannot rot invisibly.
 PAUSE_RESURFACE_SECS=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT}
@@ -346,12 +348,19 @@ handle_paused_stale() {  # <window> <task> <hash>
   rf="$STATE/.paused-resurfaced-$key"
   rf_age=$(age_of "$rf")   # 999999 when no prior re-surface
   if [ "$age" -ge "$PAUSE_RESURFACE_SECS" ] && [ "$rf_age" -ge "$PAUSE_RESURFACE_SECS" ]; then
-    reason="stale: $win (paused ${age}s, awaiting external - declared pause, rechecked on a long cadence not a wedge; confirm the wait still holds)"
+    reason="stale: $win (paused ${age}s, awaiting external - declared pause or hold, rechecked on a long cadence not a wedge; confirm the wait still holds)"
     fm_wake_append stale "$win" "$reason" || exit 1
     date +%s > "$rf"
     wake "$reason"
   fi
   triage_log "absorbed stale (paused, awaiting external, age ${age}s): $win"
+}
+
+# 0 when <task>'s idle pane is expected: its last status line declares a pause or
+# captain-held transfer, or its backlog item carries an active hold. Both
+# predicates are owned by fm-classify-lib.sh; the cheap status read runs first.
+task_pause_declared() {  # <task> <last-status-line>
+  status_is_paused_or_captain_held "$2" || task_is_backlog_held "$FM_HOME" "$1"
 }
 
 clear_pause_state() {  # <window>
@@ -381,7 +390,7 @@ pause_state_class() {  # <window> <task>
   key=${key//./_}
   last=$(last_status_line "$STATE/$task.status")
   recheck_file="$STATE/.paused-rechecked-$key"
-  if ! status_is_paused_or_captain_held "$last"; then
+  if ! task_pause_declared "$task" "$last"; then
     rm -f "$recheck_file"
     crew_absorb_class "$task"
     return
@@ -428,7 +437,7 @@ surface_nonterminal_stale() {  # <window> <hash>
   rm -f "$STATE/.stale-since-$key"
   task=$(window_to_task "$win" "$STATE")
   last=$(last_status_line "$STATE/$task.status")
-  if status_is_paused_or_captain_held "$last"; then
+  if task_pause_declared "$task" "$last"; then
     : > "$STATE/.paused-$key"
     date +%s > "$STATE/.paused-rechecked-$key"
     date +%s > "$STATE/.paused-resurfaced-$key"
@@ -1011,7 +1020,7 @@ EOF
     key=${key//\//_}
     key=${key//./_}
     last=$(last_status_line "$STATE/$task.status")
-    if ! status_is_paused_or_captain_held "$last" && [ -e "$STATE/.paused-$key" ]; then
+    if [ -e "$STATE/.paused-$key" ] && ! task_pause_declared "$task" "$last"; then
       clear_pause_tracking "$w"
     fi
     if [ "$kind" = secondmate ] && ! status_is_paused "$last"; then
@@ -1095,8 +1104,8 @@ EOF
           #   - working: an actively-running pipeline legitimately sits on a static
           #     pane (e.g. waiting on CI), so absorb and start the wedge timer so a
           #     genuinely frozen run still escalates past STALE_ESCALATE_SECS;
-          #   - paused: the crew declared an external wait, or a declared pause or
-          #     captain hold is paired with a confidently dead agent, so absorb on
+          #   - paused: the crew declared an external wait, or a declared pause,
+          #     captain hold, or backlog hold is paired with a confidently dead agent, so absorb on
           #     the long PAUSE_RESURFACE_SECS cadence instead of wedge-escalating;
           #   - none: no running pipeline, no exact busy verdict, no declared pause.
           #     Surface immediately so firstmate inspects the inconclusive state
@@ -1121,7 +1130,7 @@ EOF
             esac
           else
             task=$(window_to_task "$w" "$STATE")
-            if [ -e "$pf" ] || status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")"; then
+            if [ -e "$pf" ] || task_pause_declared "$task" "$(last_status_line "$STATE/$task.status")"; then
               case "$(pause_state_class "$w" "$task")" in
                 paused)  handle_paused_stale "$w" "$task" "$h" ;;
                 working) clear_pause_state "$w"
@@ -1144,7 +1153,7 @@ EOF
         else
           rm -f "$ssf" "$ewf"
         fi
-        if [ -e "$pf" ] && { [ "$n" -ge 2 ] || ! status_is_paused_or_captain_held "$(last_status_line "$STATE/$(window_to_task "$w" "$STATE").status")"; }; then
+        if [ -e "$pf" ] && { [ "$n" -ge 2 ] || ! task_pause_declared "$task" "$(last_status_line "$STATE/$task.status")"; }; then
           clear_pause_tracking "$w"
         fi
       fi
@@ -1157,7 +1166,7 @@ EOF
         rm -f "$ssf" "$ewf"
       fi
       task=$(window_to_task "$w" "$STATE")
-      if ! afk_present && status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")" && [ "$busy_now" -ne 0 ]; then
+      if ! afk_present && [ "$busy_now" -ne 0 ] && task_pause_declared "$task" "$(last_status_line "$STATE/$task.status")"; then
         case "$(pause_state_class "$w" "$task")" in
           paused) handle_paused_stale "$w" "$task" "$h" ;;
           *)      clear_pause_tracking "$w" ;;
