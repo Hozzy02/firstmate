@@ -259,6 +259,55 @@ test_incremental_agrees_with_full_fold_across_appends() {
   pass "the incremental fold matches the full fold across appends in both key positions"
 }
 
+test_whitespace_only_lines_are_skipped_by_both_folds() {
+  local dir f expected activities
+  dir=$(case_dir whitespace)
+  f="$dir/t.status"
+  {
+    printf '\n'
+    printf '   \n'
+    printf '\t \t\n'
+    printf 'needs-decision [key=ws]: pick one\n'
+    printf ' \n'
+    printf '  working [key=phase]: indented but not blank\n'
+  } > "$f"
+  expected=$(printf 'ws\tneeds-decision\tpick one\n')
+  assert_fold "$f" "$expected" "whitespace-only lines never open or close a decision"
+  activities=$(status_open_activities "$f")
+  [ "$activities" = "$(printf 'phase\tworking\tindented but not blank\n')" ] \
+    || fail "activities fold mishandled whitespace-only or indented lines: got '$activities'"
+  pass "whitespace-only lines are skipped while indented events still fold"
+}
+
+# A long-lived secondmate status log reaches hundreds of 1-4 KB lines, and
+# fm-send --resolve-key folds the whole log before every answer. A per-line
+# step that is superlinear in line length (macOS bash 3.2 pattern
+# substitution under a UTF-8 locale) turned one such fold into minutes of CPU,
+# so this pins the fold of a realistic large log to a generous wall-clock bound
+# under a UTF-8 locale when the host has one.
+test_fold_stays_fast_on_a_large_log() {
+  local dir f pad i utf8 got expected elapsed bound=20
+  dir=$(case_dir large-log)
+  f="$dir/t.status"
+  pad=$(printf 'progress detail with multibyte text é ü ✓ and plenty of words %.0s' $(seq 1 22))
+  : > "$f"
+  printf 'needs-decision [key=buried]: still open under a long log\n' >> "$f"
+  for ((i = 1; i <= 240; i++)); do
+    printf 'working [key=phase-%s]: %s\n' "$i" "$pad" >> "$f"
+  done
+  printf 'blocked [key=closed]: %s\n' "$pad" >> "$f"
+  printf 'resolved [key=closed]: answered\n' >> "$f"
+  utf8=$(locale -a 2>/dev/null | grep -iE '^(en_US|C)\.utf-?8$' | head -1)
+  expected=$(printf 'buried\tneeds-decision\tstill open under a long log\n')
+  SECONDS=0
+  got=$(if [ -n "$utf8" ]; then export LC_ALL=$utf8; fi; status_open_decisions "$f")
+  elapsed=$SECONDS
+  [ "$got" = "$expected" ] || fail "large-log fold mismatch: got '$got' want '$expected'"
+  [ "$elapsed" -le "$bound" ] \
+    || fail "whole-log fold of a 243-line, ~1.5 KB-per-line log took ${elapsed}s (bound ${bound}s, locale ${utf8:-default})"
+  pass "the whole-log fold of a large status log stays within ${bound}s (took ${elapsed}s)"
+}
+
 test_stated_key_is_honored_in_both_positions
 test_bare_keyless_line_still_folds_to_default
 test_resolution_closes_across_positions
@@ -272,3 +321,5 @@ test_corr_only_tag_opens_as_default_like_a_bare_line
 test_key_only_before_colon_still_opens_no_regression
 test_blocked_and_resolved_are_tag_order_independent
 test_incremental_agrees_with_full_fold_across_appends
+test_whitespace_only_lines_are_skipped_by_both_folds
+test_fold_stays_fast_on_a_large_log
