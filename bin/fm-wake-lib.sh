@@ -226,6 +226,35 @@ fm_pi_extension_owns_supervision() {
   fm_pid_alive "$session_pid"
 }
 
+# fm_autoarm_handoff_pending <state>
+# True when the Claude Stop-owned auto-arm's last recorded cycle ended by design
+# and the next Stop will re-arm: the hook exited 2 to hand a wake to a model turn
+# (outcome=rewake), or it was signalled mid-arm and no live hook owner remains
+# (outcome=arming). The watcher is intentionally absent for that whole model turn,
+# so its beacon ages without meaning a lapse. Bounded by FM_AUTOARM_HANDOFF_HOLD
+# (default: the hook's declared timeout) so a hand-off nothing ever completes still
+# alarms. A live hook owner never qualifies: a hook holding the lock with no beating
+# watcher is a wedged arm, which must alarm.
+fm_autoarm_handoff_pending() {
+  local state=$1 epoch outcome age hold pid
+  epoch="$state/.claude-autoarm-epoch"
+  [ -f "$epoch" ] || return 1
+  outcome=$(sed -n 's/^.*outcome=\([a-z][a-z-]*\) .*$/\1/p' "$epoch" 2>/dev/null || true)
+  case "$outcome" in
+    rewake) : ;;
+    arming)
+      pid=$(cat "$state/.claude-autoarm.lock/pid" 2>/dev/null || true)
+      ! fm_pid_alive "$pid" || return 1
+      ;;
+    *) return 1 ;;
+  esac
+  hold=${FM_AUTOARM_HANDOFF_HOLD:-28800}
+  case "$hold" in ''|*[!0-9]*) hold=28800 ;; esac
+  age=$(fm_path_age "$epoch")
+  case "$age" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$age" -lt "$hold" ]
+}
+
 # fm_watcher_supervision_verdict <state> <watch-path> [grace] [home] [root]
 # Model-aware "is supervision healthy right now" verdict for the pull warning
 # guard (bin/fm-guard.sh), NOT the arm layer or the turn-end guard. Sets:
@@ -237,7 +266,8 @@ fm_pi_extension_owns_supervision() {
 #                              stale-beacon - the beacon is stale beyond grace or
 #                                             absent (a genuine supervision lapse)
 # autoarm: a fresh beacon within grace is healthy even with no live watcher,
-# because the watcher only runs between turns; only a stale beacon is a lapse.
+# because the watcher only runs between turns; a stale beacon is a lapse unless
+# the Stop-owned hand-off is pending (fm_autoarm_handoff_pending).
 # extension: a live identity-matched watcher is the ordinary healthy state, but a
 # genuinely unheld lock is also healthy while the beacon is fresh AND a live Pi
 # session provably owns continuity (fm_pi_extension_owns_supervision) - that is the
@@ -266,7 +296,9 @@ fm_watcher_supervision_verdict() {
   esac
   model=$(fm_supervision_model)
   if [ "$model" = autoarm ]; then
-    [ "$fresh" = true ] && FM_WATCHER_VERDICT_OK=true
+    if [ "$fresh" = true ] || fm_autoarm_handoff_pending "$state"; then
+      FM_WATCHER_VERDICT_OK=true
+    fi
     return 0
   fi
   if fm_watcher_healthy "$state" "$watch" "$grace" "$home"; then
@@ -369,6 +401,7 @@ fm_lock_remove_stray_owner_link() {
 
 fm_lock_claim_blocked_by_steal() {
   local lockdir=$1 allowed_steal_owner=${2:-} steal
+  case "$lockdir" in *.steal) return 1 ;; esac
   steal="$lockdir.steal"
   [ -e "$steal" ] || [ -L "$steal" ] || return 1
   if [ -n "$allowed_steal_owner" ] && fm_lock_points_to_owner "$steal" "$allowed_steal_owner"; then
@@ -723,6 +756,35 @@ fm_recovery_marker_arm_check() {
   fm_recovery_transition "$1" arm-check
 }
 
+# A steal lock serializes reclaiming a stale primary lock. It is never itself
+# guarded by another steal lock: nesting made every failed create recurse into a
+# longer name (.steal.steal...) until the name exceeded the filesystem limit.
+# A stale steal holder is reclaimed in place under the same owner recheck instead.
+fm_lock_reclaim_stale_steal() {
+  local lockdir=$1 pid owner
+  pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+  if fm_pid_alive "$pid" || fm_lock_mid_acquire_is_fresh "$lockdir" "$pid"; then
+    FM_LOCK_HELD_PID=$pid
+    return 1
+  fi
+  owner=
+  if [ -L "$lockdir" ]; then
+    owner=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
+  fi
+  if [ -e "$lockdir" ] || [ -L "$lockdir" ]; then
+    if ! fm_lock_recheck_stale_owner "$lockdir" "$owner" "$pid"; then
+      FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+      return 1
+    fi
+    fm_lock_remove_path "$lockdir" || true
+  fi
+  if fm_lock_try_create "$lockdir"; then
+    return 0
+  fi
+  FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+  return 1
+}
+
 fm_lock_try_acquire() {
   local lockdir=$1 pid steal cur rc steal_owner primary_owner
   FM_LOCK_HELD_PID=
@@ -760,6 +822,10 @@ fm_lock_try_acquire() {
     FM_LOCK_HELD_PID=$pid
     return 1
   fi
+
+  case "$lockdir" in
+    *.steal) fm_lock_reclaim_stale_steal "$lockdir"; return ;;
+  esac
 
   steal="$lockdir.steal"
   if ! fm_lock_try_acquire "$steal"; then
