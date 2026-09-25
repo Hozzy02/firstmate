@@ -77,6 +77,13 @@ esac
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 PAUSED_VERB=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
 
+# Captain's token-economy caps, shared by every generated worker variant.
+BREVITY_CAPS="Status lines stay under 300 characters.
+Commit messages: one subject line plus at most 3 prose body lines; git trailers sit outside the cap.
+PR descriptions: at most 5 lines plus the attribution footer.
+Do not narrate routine progress."
+BREVITY_RULE=${BREVITY_CAPS//$'\n'/ }
+
 resolve_directory_input() {
   local name=$1 path=$2 resolved
   case "$path" in
@@ -232,6 +239,9 @@ For a detailed answer (an investigation, a plan, an audit), write it to a doc un
 Before treating an investigation or visual review as complete, load \`decision-hold-lifecycle\` from this home's \`.agents/skills/\` and pass its shared completion gate.
 A message with NO marker is the captain typing directly into your pane: treat it as authoritative captain intervention and stay conversational exactly as you would for any captain message; do not force it onto the status path.
 
+# Brevity
+$BREVITY_CAPS
+
 # Escalation to main firstmate
 Handle routine work yourself.
 Report only true captain-relevant outcomes or a declared external wait by appending one line:
@@ -254,6 +264,7 @@ You are persistent by default. Do not exit just because your queue is empty.
 On startup and restart, run normal firstmate bootstrap and recovery through \`bin/fm-session-start.sh\` for your own home, but only to RECONCILE work that is already yours: in-flight crewmates, tracked backlog items, and durable watches recorded in this home.
 When you have no assigned or in-flight work after that reconciliation, go idle and wait silently for the main firstmate to route you a task.
 An empty queue is a healthy resting state, not a cue to invent work: never spawn a survey, audit, or any self-directed "find work" task on your own initiative.
+Once your queue is empty and your children are torn down, go idle; the main firstmate sends \`/clear\` (you cannot self-issue it).
 If this charter cannot be carried out, append \`blocked: {why}\` or \`failed: {why}\` to the main status file and stop.
 EOF
 if [ "$SECONDMATE_CHARTER" = "{TASK}" ]; then
@@ -335,6 +346,7 @@ The report is the only thing that survives, so anything worth keeping must be in
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
+8. Brevity caps: $BREVITY_RULE
 
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
@@ -451,6 +463,7 @@ $RULE1
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
+8. Brevity caps: $BREVITY_RULE
 
 # Project memory
 If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.
