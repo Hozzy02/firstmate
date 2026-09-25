@@ -261,6 +261,8 @@ This prevents closing the workspace's last tab before a replacement exists.
 
 The generic Herdr agent-liveness probe reuses the same classifier.
 A structurally gone pane becomes `missing`, a restored agent-less shell becomes `dead`, a registered agent becomes `alive`, and an unexpected read becomes `unreadable`.
+The one exception is an opencode agent still registered as idle or done after its TUI exited: opencode's hook-driven registration can outlive the process, so it reads `dead` once the pane provably holds only a lone idle shell (the pane's own, or the worktree subshell `treehouse get` leaves under it).
+A working or blocked agent, a live opencode in the foreground, and every other harness keep the `alive` verdict, and the husk classifier that licenses closing panes is not refined this way.
 Unlike tmux process-name inspection, native registration can classify Pi without guessing from a generic interpreter name.
 
 The session-start sweep uses this probe.
