@@ -542,7 +542,7 @@ test_brevity_caps_in_every_variant() {
     assert_grep 'at most 5 lines plus the attribution footer' "$brief" "$name brief lost the PR cap"
     assert_grep 'Do not narrate routine progress' "$brief" "$name brief lost the no-narration rule"
   done
-  assert_grep 'the main firstmate sends `/clear`' "$home/data/brev-second/brief.md" \
+  assert_grep 'go idle; the main firstmate sends' "$home/data/brev-second/brief.md" \
     "secondmate charter lost the idle-then-/clear rule"
   pass "fm-brief.sh: every variant carries the brevity caps; charter carries the /clear rule"
 }
