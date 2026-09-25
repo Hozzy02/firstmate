@@ -4340,10 +4340,75 @@ test_wait_transition_clean_timeout_returns_1() {
   pass "fm_backend_herdr_wait_transition: stock macOS Bash clean timeout closes fd 9 and returns 1"
 }
 
+# herdr_agent_state_verdict: run fm_backend_herdr_agent_state against a fake
+# herdr CLI answering pane get, agent get, and pane process-info from the given
+# agent name, agent status, and foreground process name (an argv0 of the
+# process name, pid 67 when it is the pane's shell), with a fake ps that shows
+# the lone shell asleep with no children.
+herdr_agent_state_verdict() {  # <agent> <agent_status> <foreground-name>
+  local agent=$1 status=$2 fg=$3 dir ps
+  dir="$TMP_ROOT/agent-state-$agent-$status-$fg"; mkdir -p "$dir"
+  ps="$dir/fake-ps"
+  cat > "$ps" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  "-axo pid=,ppid=") printf '1 0\n67 1\n' ;;
+  "-p 67 -o stat=") printf 'Ss\n' ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$ps"
+  ROOT="$ROOT" AGENT=$agent STATUS=$status FG=$fg FM_HERDR_PS_BIN="$ps" \
+    FM_BACKEND_HERDR_IDLE_SHELL_PROOF_POLLS=1 bash -c '
+    . "$ROOT/bin/backends/herdr.sh"
+    fm_backend_herdr_cli() {
+      case "$2 $3" in
+        "pane get") printf "{\"result\":{\"pane\":{\"pane_id\":\"w1:p1\"}}}\n" ;;
+        "agent get") printf "{\"result\":{\"agent\":{\"pane_id\":\"w1:p1\",\"agent\":\"%s\",\"agent_status\":\"%s\"}}}\n" "$AGENT" "$STATUS" ;;
+        "pane process-info")
+          if [ "$FG" = zsh ]; then pid=67; else pid=68; fi
+          printf "{\"result\":{\"type\":\"pane_process_info\",\"process_info\":{\"pane_id\":\"w1:p1\",\"shell_pid\":67,\"foreground_process_group_id\":%s,\"foreground_processes\":[{\"argv\":[\"%s\"],\"argv0\":\"%s\",\"name\":\"%s\",\"pid\":%s}]}}}\n" "$pid" "$FG" "$FG" "$FG" "$pid" ;;
+      esac
+    }
+    fm_backend_herdr_agent_state fmtest:w1:p1
+  '
+}
+
+test_agent_state_exited_opencode_with_stale_idle_registration_reads_dead() {
+  local status
+  for status in idle "done"; do
+    [ "$(herdr_agent_state_verdict opencode "$status" zsh)" = dead ] \
+      || fail "a $status opencode whose pane is back at a lone idle shell must read agent-free"
+  done
+  pass "herdr agent_state: an exited opencode's stale idle or done registration reads dead"
+}
+
+test_agent_state_live_idle_opencode_stays_alive() {
+  local status
+  for status in idle "done"; do
+    [ "$(herdr_agent_state_verdict opencode "$status" opencode)" = alive ] \
+      || fail "a $status opencode still in the pane foreground must stay alive"
+  done
+  pass "herdr agent_state: a genuinely live idle opencode stays alive"
+}
+
+test_agent_state_stale_reclassification_is_opencode_and_idle_only() {
+  [ "$(herdr_agent_state_verdict opencode working zsh)" = alive ] \
+    || fail "a working opencode must never be reclassified"
+  [ "$(herdr_agent_state_verdict opencode blocked zsh)" = alive ] \
+    || fail "a blocked opencode must never be reclassified"
+  [ "$(herdr_agent_state_verdict claude idle zsh)" = alive ] \
+    || fail "a non-opencode harness must keep its existing verdict"
+  pass "herdr agent_state: working, blocked, and non-opencode agents are never reclassified"
+}
+
 # shellcheck source=bin/fm-backend.sh
 . "$ROOT/bin/fm-backend.sh"
 
 test_version_check_accepts_current_protocol
+test_agent_state_exited_opencode_with_stale_idle_registration_reads_dead
+test_agent_state_live_idle_opencode_stays_alive
+test_agent_state_stale_reclassification_is_opencode_and_idle_only
 test_version_check_refuses_old_protocol
 test_version_check_refuses_missing_herdr
 test_workspace_label_primary_home_no_marker

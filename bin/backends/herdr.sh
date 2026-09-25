@@ -1921,18 +1921,53 @@ fm_backend_herdr_tab_is_husk() {  # <session> <pane_id>
   esac
 }
 
+# fm_backend_herdr_pane_exited_opencode: succeed only when <pane_id> still
+# reads as a registered idle or done opencode agent while the pane provably
+# holds one lone idle shell and no opencode process.
+# opencode's hook-driven lifecycle authority can outlive the process itself, so
+# the registered agent is a stale record, not a live worker (`agent explain`
+# keeps saying idle with screen_detection_skip_reason
+# full_lifecycle_hook_authority after the TUI exits and the pane is back at its
+# shell prompt).
+# The verdict needs BOTH signals: a working or blocked agent never qualifies,
+# and the idle-shell proof (fm_backend_herdr_pane_idle_shell_pid, its single
+# owner) fails whenever any harness process is in the foreground, so a
+# genuinely live idle opencode stays alive.
+# Other harnesses are never reclassified here.
+fm_backend_herdr_pane_exited_opencode() {  # <session> <pane_id>
+  local session=$1 pane_id=$2 out
+  out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>&1)
+  printf '%s' "$out" | jq -e --arg pane "$pane_id" '
+    .result.agent.pane_id == $pane
+    and .result.agent.agent == "opencode"
+    and (.result.agent.agent_status == "idle" or .result.agent.agent_status == "done")
+  ' >/dev/null 2>&1 || return 1
+  fm_backend_herdr_pane_idle_shell_pid "$session" "$pane_id" >/dev/null
+}
+
 # fm_backend_herdr_agent_state: recovery-grade state for the same session-start
 # sweep as the tmux classifier. It reuses the husk classifier rather than
 # creating a second Herdr state machine: a structurally gone pane is `missing`,
 # a confirmed agent-less pane is `dead`, a registered agent is `alive`, and an
 # unexpected or failed API read is `unreadable`.
+# The one refinement is an exited opencode whose stale idle registration
+# outlived its process (fm_backend_herdr_pane_exited_opencode): it reads `dead`
+# so exit confirmation and relaunch can proceed.
+# fm_backend_herdr_pane_agent_state deliberately stays unrefined because its
+# husk verdict licenses closing panes.
 fm_backend_herdr_agent_state() {  # <target>
   local target=$1
   fm_backend_herdr_parse_target "$target" || { printf 'unreadable'; return 0; }
   case "$(fm_backend_herdr_pane_agent_state "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE")" in
     dead) printf 'missing' ;;
     no-agent) printf 'dead' ;;
-    live) printf 'alive' ;;
+    live)
+      if fm_backend_herdr_pane_exited_opencode "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE"; then
+        printf 'dead'
+      else
+        printf 'alive'
+      fi
+      ;;
     *) printf 'unreadable' ;;
   esac
 }

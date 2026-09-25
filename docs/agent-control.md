@@ -99,6 +99,8 @@ Switching harness is therefore one ordinary relaunch rather than a separate mech
   zellij, orca, and cmux are refused rather than reported as successful blind.
 - An ambiguous or unreadable endpoint state refuses.
   Only a positively classified state acts.
+- On herdr, an opencode agent still registered as idle or done reads agent-free once its pane provably holds only a lone idle shell, because opencode's hook-driven registration can outlive the exited TUI.
+  A working or blocked agent, a live opencode in the foreground, and every other harness keep their registered verdict.
 - `fm-spawn --relaunch` independently refuses unless the recorded endpoint is positively agent-free and its shell is sitting in the recorded worktree, so a replacement can never join a live agent or start outside the copy holding the work.
 
 ## Capability matrix
