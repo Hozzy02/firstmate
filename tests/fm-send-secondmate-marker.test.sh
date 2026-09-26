@@ -289,7 +289,8 @@ expect_marked() {
   local fb=$1 home=$2 log=$3 target=$4 text=$5 why=$6 rc got
   run_send "$fb" "$home" "$log" "$target" "$text"; rc=$?
   expect_code 0 "$rc" "$why should succeed"
-  got=$(record_body "$(find "$home/state/domain.inbox" -maxdepth 1 -type f -name '*.msg' | sort | tail -1)")
+  got=$(cat "$log")
+  [ -n "$got" ] || got=$(record_body "$(find "$home/state/domain.inbox" -maxdepth 1 -type f -name '*.msg' | sort | tail -1)")
   case "$got" in
     "$FM_FROMFIRST_MARK"corr=*"$text") : ;;
     *) fail "$why: ordinary text should stay marked"$'\n'"--- bytes ---"$'\n'"$(printf '%s' "$got" | od -An -c)" ;;

@@ -705,7 +705,7 @@ build_remote_restriction_payload() { # <outbox> <payload>
 }
 
 remote_deliver_outbox() { # <secondmate-id> <outbox-path>
-  local id=$1 outbox=$2 remote_rel receive_out snapshot bytes hash generation counter counter_tmp current marker wake_rc=0 wake_state=pending
+  local id=$1 outbox=$2 remote_rel receive_out snapshot restrictions bytes hash generation counter counter_tmp current marker wake_rc=0 wake_state=pending
   [ -f "$outbox" ] && [ ! -L "$outbox" ] || {
     echo "error: pending outbox is unavailable or unsafe: $outbox" >&2
     return 1
@@ -714,33 +714,44 @@ remote_deliver_outbox() { # <secondmate-id> <outbox-path>
     umask 077
     mktemp "${TMPDIR:-/tmp}/fm-handoff-payload.XXXXXX"
   ) || return 1
-  if ! cp -p -- "$outbox" "$snapshot"; then
+  restrictions=$(
+    umask 077
+    mktemp "${TMPDIR:-/tmp}/fm-handoff-restrictions.XXXXXX"
+  ) || {
     rm -f -- "$snapshot"
+    return 1
+  }
+  if ! build_remote_restriction_payload "$outbox" "$restrictions"; then
+    rm -f -- "$snapshot" "$restrictions"
+    return 1
+  fi
+  if ! cp -p -- "$outbox" "$snapshot"; then
+    rm -f -- "$snapshot" "$restrictions"
     return 1
   fi
   bytes=$(LC_ALL=C wc -c <"$snapshot" | tr -d ' ')
   hash=$(sha256_file "$snapshot") || {
-    rm -f -- "$snapshot"
+    rm -f -- "$snapshot" "$restrictions"
     return 1
   }
   counter="$STATE/.remote-handoff-$id.generation"
   current=0
   if [ -e "$counter" ] || [ -L "$counter" ]; then
     [ -f "$counter" ] && [ ! -L "$counter" ] || {
-      rm -f -- "$snapshot"
+      rm -f -- "$snapshot" "$restrictions"
       return 1
     }
     IFS= read -r current <"$counter" || {
-      rm -f -- "$snapshot"
+      rm -f -- "$snapshot" "$restrictions"
       return 1
     }
     case "$current" in '' | *[!0-9]*)
-      rm -f -- "$snapshot"
+      rm -f -- "$snapshot" "$restrictions"
       return 1
       ;;
     esac
     [ "${#current}" -le 17 ] || {
-      rm -f -- "$snapshot"
+      rm -f -- "$snapshot" "$restrictions"
       return 1
     }
   fi
@@ -750,38 +761,40 @@ remote_deliver_outbox() { # <secondmate-id> <outbox-path>
     mktemp "$STATE/.remote-handoff-generation.XXXXXX"
   ) ||
     {
-      rm -f -- "$snapshot"
+      rm -f -- "$snapshot" "$restrictions"
       return 1
     }
   printf '%s\n' "$generation" >"$counter_tmp" ||
     {
-      rm -f -- "$snapshot" "$counter_tmp"
+      rm -f -- "$snapshot" "$restrictions" "$counter_tmp"
       return 1
     }
   chmod 600 "$counter_tmp" ||
     {
-      rm -f -- "$snapshot" "$counter_tmp"
+      rm -f -- "$snapshot" "$restrictions" "$counter_tmp"
       return 1
     }
   mv -f -- "$counter_tmp" "$counter" ||
     {
-      rm -f -- "$snapshot" "$counter_tmp"
+      rm -f -- "$snapshot" "$restrictions" "$counter_tmp"
       return 1
     }
   remote_rel="state/handoff/$id.outbox.md"
   if ! "$SCRIPT_DIR/fm-on.sh" --stdin "$id" fm-remote-file.sh put "$remote_rel" 1048576 \
     "$bytes" "$hash" "$generation" <"$snapshot"; then
-    rm -f -- "$snapshot"
+    rm -f -- "$snapshot" "$restrictions"
     echo "error: handoff transfer to $id was unavailable or completion is unknown; outbox preserved at $outbox" >&2
     return 1
   fi
   rm -f -- "$snapshot"
-  if ! receive_out=$("$SCRIPT_DIR/fm-on.sh" "$id" fm-backlog-receive.sh \
-    "$remote_rel" "$bytes" "$hash" "$generation" </dev/null 2>&1); then
+  if ! receive_out=$("$SCRIPT_DIR/fm-on.sh" --stdin "$id" fm-backlog-receive.sh \
+    "$remote_rel" "$bytes" "$hash" "$generation" <"$restrictions" 2>&1); then
+    rm -f -- "$restrictions"
     [ -z "$receive_out" ] || printf '%s\n' "$receive_out" >&2
     echo "error: handoff receipt by $id was unavailable or completion is unknown; outbox preserved at $outbox" >&2
     return 1
   fi
+  rm -f -- "$restrictions"
   marker="$STATE/.backlog-handoff-$id.wake-pending"
   if [ "$RECEIVER_WAKE_IGNORE_ID" = "$id" ]; then
     wake_state=dropped
@@ -1088,6 +1101,8 @@ REQUESTED_BATCH=$(receiver_wake_batch_id "$@") || {
   echo "error: receiver wake batch identity could not be recorded; nothing was moved" >&2
   exit 1
 }
+
+copy_local_restrictions "$SUB_HOME/data" "$@" || exit 1
 
 if [ "${#TO_MOVE[@]}" -eq 0 ]; then
   WAKE_PENDING_MARKER="$STATE/.backlog-handoff-$ID.wake-pending"

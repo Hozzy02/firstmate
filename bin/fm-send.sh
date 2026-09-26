@@ -914,7 +914,11 @@ else
     if [ -n "$FIRE_AND_FORGET_ID" ] || [ "$TARGET_BACKEND" = remote ]; then
       INBOX_PLANE=1
     else
-      fm_send_is_harness_command "$RESOLVE_ANSWER_TEXT" || INBOX_PLANE=1
+      case "$RESOLVE_ANSWER_TEXT" in
+      /*) ;;
+      \$*) [ "$TARGET_HARNESS" = codex ] || INBOX_PLANE=1 ;;
+      *) INBOX_PLANE=1 ;;
+      esac
     fi
   fi
   if [ "$INBOX_PLANE" = 1 ] && [ "$TARGET_BACKEND" = remote ]; then
