@@ -1,0 +1,5 @@
+ok - real herdr: fm-spawn.sh auto-detects verified herdr from HERDR_ENV=1 (no explicit config) without an opt-out steer
+ok - real Herdr: default-path spawn records backend=herdr and Herdr session/workspace/tab/pane fields in meta
+ok - real Herdr: the default-path spawn's launch command actually ran in the Herdr pane
+ok - real Herdr: teardown completes the default-path spawn/teardown cycle (meta cleared, pane closed)
+ok - real Herdr: isolated lab session removed and default fleet session unchanged

@@ -1,0 +1,47 @@
+# Scenario: captain restricts held-item, hands it to local secondmate 'design'
+
+$ env FM_HOME=/private/var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T/tmp.xzsqjITTAd/main /Users/randalwade/.no-mistakes/worktrees/3a2378ca6c3e/01M3G1XBEXDGXY5P7MN9E5YKYV/bin/fm-dispatch-restrict.sh set held-item --reason captain hold --by captain
+restricted held-item in /private/var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T/tmp.xzsqjITTAd/main (by=captain at=2026-09-26T23:54:42Z reason=captain hold)
+[exit 0]
+
+$ env FM_HOME=/private/var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T/tmp.xzsqjITTAd/main /Users/randalwade/.no-mistakes/worktrees/3a2378ca6c3e/01M3G1XBEXDGXY5P7MN9E5YKYV/bin/fm-backlog-handoff.sh design held-item free-item
+handed off 2 item(s) to design: held-item free-item
+  into /private/var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T/tmp.xzsqjITTAd/sub/data/backlog.md
+error: no-mistakes gate agent must not drive the fleet (NO_MISTAKES_GATE set)
+error: backlog delivery to secondmate design succeeded, but its receiver wake failed; retry a tracked remote wake with --resume-pending or a later new handoff, and retry a local wake by rerunning its handoff
+[exit 1]
+
+--- secondmate backlog
+## In flight
+
+## Queued
+- [ ] held-item - captain wants this held (repo: alpha)
+- [ ] free-item - normal work (repo: alpha)
+
+## Done
+--- secondmate restrictions
+
+$ env FM_HOME=/private/var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T/tmp.xzsqjITTAd/sub /Users/randalwade/.no-mistakes/worktrees/3a2378ca6c3e/01M3G1XBEXDGXY5P7MN9E5YKYV/bin/fm-dispatch-restrict.sh list
+held-item	by=captain	at=2026-09-26T23:54:42Z	reason=captain hold
+[exit 0]
+record byte-identical to source home
+free-item restricted in secondmate? no
+
+# Converge: secondmate loses its record, re-run handoff for already-present key
+
+$ env FM_HOME=/private/var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T/tmp.xzsqjITTAd/main /Users/randalwade/.no-mistakes/worktrees/3a2378ca6c3e/01M3G1XBEXDGXY5P7MN9E5YKYV/bin/fm-backlog-handoff.sh design held-item
+nothing to move: held-item already present in /private/var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T/tmp.xzsqjITTAd/sub/data/backlog.md
+error: no-mistakes gate agent must not drive the fleet (NO_MISTAKES_GATE set)
+error: backlog delivery to secondmate design succeeded, but its receiver wake failed; retry a tracked remote wake with --resume-pending or a later new handoff, and retry a local wake by rerunning its handoff
+[exit 1]
+
+$ env FM_HOME=/private/var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T/tmp.xzsqjITTAd/sub /Users/randalwade/.no-mistakes/worktrees/3a2378ca6c3e/01M3G1XBEXDGXY5P7MN9E5YKYV/bin/fm-dispatch-restrict.sh list
+held-item	by=captain	at=2026-09-26T23:54:42Z	reason=captain hold
+[exit 0]
+
+# Adversarial: symlinked restriction source dir must be refused
+
+$ env FM_HOME=/private/var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T/tmp.xzsqjITTAd/main /Users/randalwade/.no-mistakes/worktrees/3a2378ca6c3e/01M3G1XBEXDGXY5P7MN9E5YKYV/bin/fm-backlog-handoff.sh design other-item
+error: dispatch restriction directory is not a real directory: /private/var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T/tmp.xzsqjITTAd/main/data/dispatch-restrictions
+[exit 1]
+other-item still in source backlog? yes

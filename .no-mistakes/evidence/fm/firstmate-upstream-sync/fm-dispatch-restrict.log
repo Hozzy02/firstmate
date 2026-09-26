@@ -1,0 +1,10 @@
+ok - fm-dispatch-restrict.sh set refuses without --reason and --by
+ok - fm-dispatch-restrict.sh set/list/lift round-trip cleanly
+ok - fm-dispatch-restrict.sh list ignores an interrupted write's staging file
+ok - fm-dispatch-restrict.sh set and lift name the home they acted on
+ok - fm-spawn.sh refuses a ship and a scout spawn for a restricted id
+ok - fm-spawn.sh checks a restriction before creating task state or locks
+ok - restriction operations refuse a symlink storage directory
+ok - fm-spawn.sh is unaffected by the restriction gate when no restriction exists
+ok - fm-spawn.sh allows a spawn again after an explicit lift
+ok - fm-spawn.sh does not apply the task-id restriction gate to a --secondmate spawn

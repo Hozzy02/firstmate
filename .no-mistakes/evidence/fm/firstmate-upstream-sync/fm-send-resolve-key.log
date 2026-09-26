@@ -1,0 +1,24 @@
+ok - fm-send --resolve-key: the answer send itself closes the open decision
+ok - fm-send --resolve-key: the close never re-wakes its own home, later lines still do
+ok - fm-send --resolve-key: separate answers do not each re-wake; later lines still do
+ok - fm-send --resolve-key: a colon-first stated key is open under that key and answerable
+ok - fm-send --resolve-key: an answer that starts a workstream leaves no orphaned decision
+ok - fm-send preserves decisions through routine work and refuses superseded terminal decisions
+ok - fm-send --resolve-key: a key that is not open refuses loudly before anything is sent
+ok - fm-send --resolve-key: the close happens at enqueue, surviving a failed doorbell
+ok - fm-send --resolve-key: a failed enqueue never closes the decision
+ok - fm-send --resolve-key: one answer closes each named key and only those
+ok - fm-send --resolve-key: one answer's closes after a drain fold never wake this home
+ok - fm-send --resolve-key: a marked local-secondmate answer closes with the plain answer text
+ok - fm-send --resolve-key: a remote-secondmate answer closes the same local ledger, transport-only difference
+ok - fm-send --resolve-key: a remote reply's leading [corr=...] tag no longer blocks closing its stated key
+ok - fm-send --resolve-key: a failed remote transport never closes the decision
+ok - fm-send --resolve-key: --key, empty message, explicit targets, and malformed keys refuse loudly
+ok - fm-send --resolve-key: a reserved pending-reply key actually closes through the operator path
+ok - fm-send --resolve-key: an unrelated writer cannot close or hijack a reserved key, and the operator close still can
+ok - fm-send --resolve-key: a reserved key this send cannot close refuses loudly before anything is sent
+ok - fm-send --resolve-key: an overlong decision key refuses before sending
+ok - fm-send --resolve-key: a stamped close line stays inside the status-line cap
+ok - fm-send --resolve-key: failed-close recovery commands safely quote operator text and paths
+ok - fm-send --resolve-key: a remote secondmate reserved-key close is the same local ledger append
+ok - fm-send --resolve-key: a decision answer refuses the attended branch before sending, a blocked: key stays steering, and the away-posture record relocates the answer

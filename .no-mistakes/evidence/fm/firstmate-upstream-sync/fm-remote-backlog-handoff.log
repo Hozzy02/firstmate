@@ -1,0 +1,22 @@
+ok - confined put rejects incomplete and superseded payload generations
+ok - confined put rejects directory replacement without external writes
+ok - receipt refuses an unterminated restriction payload and accepts an empty one
+ok - remote handoff refuses a symlinked restriction source directory
+ok - ambiguous receipt leaves one durable outbox and no duplicate dispatchable source
+ok - re-delivery after unknown completion converges without duplication
+ok - dropped transfer recovery overwrites scratch and delivers exactly once
+ok - concurrent handoffs serialize staging through confirmed cleanup
+ok - receiver removes one proven dead stale lock and retries once
+ok - pending resume holds each source task lock through remote receipt
+ok - bootstrap detects pending outbox handoffs without a journal
+ok - remote handoff releases durable work and separately retries its receiver wake
+ok - an escalated undelivered receiver wake stays retryable instead of jamming the outbox
+ok - a permanently unconfirmable wake never jams later durable handoffs
+ok - fresh remote work gets a new wake after confirmed cleanup recovery
+ok - confirmed marker cleanup cannot fail a completed remote handoff
+ok - delivered pending state cannot suppress a new handoff wake
+ok - unrecordable best-effort wake state drops without blocking later handoffs
+ok - undeletable invalid wake state cannot block remote handoffs
+ok - route classification serializes with retirement before staging
+ok - unconfigured bootstrap has no remote handoff behavior
+ALL TESTS PASSED

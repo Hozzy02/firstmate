@@ -1,0 +1,7 @@
+$ fm_backend_name  (clean env: no FM_BACKEND, no config/backend, no TMUX/HERDR/CMUX markers)
+herdr
+$ fm_backend_name  (inside tmux: TMUX set)
+NOTICE: auto-detected tmux runtime (TMUX) - spawning into the legacy tmux backend. Set config/backend or pass --backend herdr to opt out.
+tmux
+$ config/backend=tmux
+tmux
