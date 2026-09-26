@@ -16,8 +16,8 @@
 # pending text after retries, while the separate turn-started conversion accepts
 # an unknown post-Enter composer only after this submit observed an idle baseline
 # become busy.
-# Herdr's OpenCode busy-queue limitation remains documented in
-# docs/herdr-backend.md.
+# The queued-Enter policy itself lives in fm_composer_queued_enter_verdict
+# (bin/fm-composer-lib.sh); this file supplies tmux's pane-busy primitive.
 #
 # FM_COMPOSER_IDLE_RE is interpreted by the shared classifier with its structural
 # and styling safety gates.
@@ -145,7 +145,7 @@ fm_tmux_composer_state() {  # <target> -> empty|pending|pending-unproven|unknown
   verdict=$(fm_composer_classify_screen "$(fm_tmux_composer_caps)" "$pane" "$cy")
   if [ "$verdict" = need-identity ]; then
     if ! identity=$(fm_tmux_composer_identity "$target") || [ -z "$identity" ]; then
-      identity=probe-absent
+      identity='probe-absent'
     fi
     verdict=$(fm_composer_classify_screen "$(fm_tmux_composer_caps)" "$pane" "$cy" "$identity")
     [ "$verdict" != need-identity ] || verdict=unknown
@@ -240,7 +240,7 @@ fm_pane_is_busy() {  # <target> [harness]
 # `unknown` verdict is preserved untouched: busy conversion without the
 # transition evidence could mark an undelivered message delivered.
 fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle]
-  local target=$1 retries=$2 sleep_s=$3 baseline_idle=${4:-} i=0 j state
+  local target=$1 retries=$2 sleep_s=$3 baseline_idle=${4:-} i=0 j state busy_state
   while :; do
     tmux send-keys -t "$target" Enter 2>/dev/null || true
     sleep "$sleep_s"
@@ -272,25 +272,26 @@ fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [baseline-idle
     return 0
   fi
   # Retries exhausted, composer still shows proven pending.
-  # If the pane is busy (agent mid-turn), the harness accepted the Enter
-  # and queued the message for processing when the current turn ends.
-  # Treat it as submitted so the caller does not re-send.
-  # On an idle pane, keep reporting pending - a genuine swallow.
-  if fm_pane_is_busy "$target"; then
-    printf 'empty'
-  else
-    printf 'pending'
-  fi
+  # Busy conversion is owned by fm_composer_queued_enter_verdict.
+  busy_state=idle
+  fm_pane_is_busy "$target" && busy_state=busy
+  fm_composer_queued_enter_verdict "$state" "$busy_state"
 }
 
 fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
-  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 baseline_idle='' baseline_state
+  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 baseline_idle='' baseline_state err
   # The turn-started baseline must predate our own typing: a pane already
   # busy before the text lands can turn "busy" for reasons unrelated to our
   # Enter, so only a clean idle-to-busy transition may confirm a submit.
   baseline_state=$(fm_pane_busy_state "$target")
   [ "$baseline_state" = idle ] && baseline_idle=1
-  tmux send-keys -t "$target" -l "$text" 2>/dev/null || { printf 'send-failed'; return 0; }
+  # A failed literal send replays tmux's stderr (for example "command too
+  # long") so the caller can log why nothing was typed.
+  if ! err=$(tmux send-keys -t "$target" -l "$text" 2>&1 >/dev/null); then
+    [ -z "$err" ] || printf '%s\n' "$err" >&2
+    printf 'send-failed'
+    return 0
+  fi
   sleep "$settle"
   fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s" "$baseline_idle"
 }

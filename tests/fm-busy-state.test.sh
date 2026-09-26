@@ -107,6 +107,64 @@ test_retire_serializes_and_rejects_stale_gen() {
   pass "retire waits for the writer lock and cannot remove a new incarnation"
 }
 
+# Regression for issue #2625: the writer lock's stale-lock branch resolved the
+# lock's mtime with `stat -f %m ... || stat -c %Y ...`. On GNU coreutils `-f` is
+# *filesystem* stat, so it consumes the format string as a path, complains on
+# stderr, prints "  File: ..." on stdout, and still exits 0 - the GNU form in the
+# fallback never ran. The following `$((now - mtime))` then evaluated the word
+# `File`, which under `set -u` aborted the writer with "File: unbound variable".
+# fm-teardown.sh died there after returning the worktree, leaving state/<id>.meta
+# and friends behind to generate stale wakes forever, and every re-run died
+# identically because the abandoned lock directory was never broken.
+#
+# The stat and uname stubs make this deterministic on any host: the writer must
+# take the Linux path and still break a provably stale lock.
+test_stale_lock_broken_under_gnu_stat() {
+  local state gen fakebin real_uname out status
+  state=$(new_state_dir gnu-stat-lock)
+  gen=$("$EV" arm "$state" t1)
+  fakebin=$(fm_fakebin "$TMP_ROOT/gnu-stat-lock")
+  real_uname=$(command -v uname)
+
+  # GNU coreutils semantics, self-contained so no real stat is consulted.
+  cat > "$fakebin/stat" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = -c ] && [ "${2:-}" = %Y ]; then
+  printf '%s\n' 1000000000   # long-abandoned lock
+  exit 0
+fi
+if [ "${1:-}" = -f ]; then
+  echo "stat: cannot read file system information for '$2': No such file or directory" >&2
+  shift 2
+  printf '  File: "%s"\n' "${1:-}"
+  exit 0
+fi
+exit 1
+SH
+  chmod +x "$fakebin/stat"
+  cat > "$fakebin/uname" <<SH
+#!/usr/bin/env bash
+if [ \$# -eq 0 ]; then printf 'Linux\n'; exit 0; fi
+exec "$real_uname" "\$@"
+SH
+  chmod +x "$fakebin/uname"
+
+  mkdir "$state/t1.busy-state.lock"
+  out=$(PATH="$fakebin:$PATH" "$EV" retire "$state" t1 --gen "$gen" 2>&1) && status=0 || status=$?
+  case "$out" in
+    *'unbound variable'*) fail "the writer still dies on GNU stat output: $out" ;;
+  esac
+  [ "$status" = 0 ] || fail "retire did not break a provably stale writer lock: $out"
+  [ ! -e "$state/t1.busy-state" ] || fail "retire left the record behind"
+  [ ! -e "$state/t1.busy-gen" ] || fail "retire left the gen sidecar behind"
+  [ ! -e "$state/t1.busy-state.lock" ] || fail "retire left the stale lock behind"
+
+  # Teardown must be able to run again over the same task without failing.
+  PATH="$fakebin:$PATH" "$EV" retire "$state" t1 --current-gen \
+    || fail "a repeated retire over already-cleaned state was not idempotent"
+  pass "the writer breaks a stale lock instead of dying on GNU stat output"
+}
+
 test_retire_missing_sidecar_is_idempotent() {
   local state gen
   state=$(new_state_dir retire-missing)
@@ -229,6 +287,141 @@ Ctrl+c:cancel'
   out=$(fm_busy_classify tmux w1 codex t1 "$state" "$tail")
   [ "$out" = "unknown codex-unverified" ] || fail "codex must never classify from footer text, got '$out'"
   pass "converted adapters never classify busy from rendered footer text"
+}
+
+# --- launch-prompt backstop (a launch pinned at fm-spawn, parked on a
+# recognized interactive prompt, must classify unknown rather than busy) ------
+
+test_launch_prompt_claude_trust_dialog() {
+  local state out
+  state=$(new_state_dir launch-prompt-claude)
+  "$EV" arm "$state" t1 >/dev/null
+  out=$(fm_busy_classify tmux w1 claude t1 "$state" 'Accessing workspace: /tmp/wt-a
+Quick safety check: Is this a project you created or one you trust?
+Claude Code'"'"'ll be able to read, edit, and execute files here.
+> No, exit
+  Yes, I trust this folder
+Enter to confirm . Esc to cancel')
+  [ "$out" = "unknown launch-prompt" ] \
+    || fail "a launch pinned at fm-spawn parked on Claude's trust dialog must classify unknown launch-prompt, got '$out'"
+  out=$(fm_busy_classify tmux w1 claude t1 "$state" 'Allow external CLAUDE.md file imports?
+This project'"'"'s CLAUDE.md imports files outside the current working directory.
+> No, disable external imports
+  Yes, allow external imports')
+  [ "$out" = "unknown launch-prompt" ] \
+    || fail "a launch pinned at fm-spawn parked on Claude's external-imports dialog must classify unknown launch-prompt, got '$out'"
+  pass "a Claude launch parked on its trust or external-imports dialog classifies unknown launch-prompt"
+}
+
+test_launch_prompt_pi_trust_dialog() {
+  local state out h
+  for h in pi pi-signed omp; do
+    state=$(new_state_dir "launch-prompt-$h")
+    "$EV" arm "$state" t1 >/dev/null
+    out=$(fm_busy_classify tmux w1 "$h" t1 "$state" ' Trust project folder?
+ /tmp/fm-pi-trust-check/wt
+
+ This allows pi to load .pi settings and resources, install missing project packages, and execute project extensions.
+
+ > Trust
+   Trust parent folder (/tmp/fm-pi-trust-check)
+   Trust (this session only)
+   Do not trust
+   Do not trust (this session only)
+
+ up/down navigate  enter select  escape/ctrl+c cancel')
+    [ "$out" = "unknown launch-prompt" ] \
+      || fail "a $h launch pinned at fm-spawn parked on the project-trust dialog must classify unknown launch-prompt, got '$out'"
+  done
+  pass "a Pi-family launch (pi, pi-signed, omp) parked on the project-trust dialog classifies unknown launch-prompt"
+}
+
+test_launch_prompt_pi_requires_both_markers() {
+  local state out
+  state=$(new_state_dir launch-prompt-pi-partial)
+  "$EV" arm "$state" t1 >/dev/null
+  # "trust" alone, with neither the dialog heading nor its decline option, must
+  # not be read as the dialog - it is an ordinary word a worker's own output
+  # could easily contain.
+  out=$(fm_busy_classify tmux w1 pi t1 "$state" 'I trust this approach and will proceed.')
+  [ "$out" = "busy fm-spawn" ] \
+    || fail "ordinary prose containing 'trust' must not classify as a parked launch, got '$out'"
+  pass "the Pi signature requires both the dialog heading and its decline option, not the bare word trust"
+}
+
+test_launch_prompt_gemini_dialogs() {
+  local state out
+  state=$(new_state_dir launch-prompt-gemini-trust)
+  "$EV" arm "$state" t1 >/dev/null
+  out=$(fm_busy_classify tmux w1 gemini t1 "$state" 'Do you trust the files in this folder?
+● 1. Trust folder (worktree)
+  2. Trust parent folder (project)
+  3. Don'"'"'t trust')
+  [ "$out" = "unknown launch-prompt" ] \
+    || fail "a Gemini launch parked on the workspace-trust dialog must classify unknown launch-prompt, got '$out'"
+
+  state=$(new_state_dir launch-prompt-gemini-auth)
+  "$EV" arm "$state" t1 >/dev/null
+  out=$(fm_busy_classify tmux w1 gemini t1 "$state" 'How would you like to authenticate for this project?
+● 2. Use Gemini API Key')
+  [ "$out" = "unknown launch-prompt" ] \
+    || fail "a Gemini launch parked on the auth-method picker must classify unknown launch-prompt, got '$out'"
+
+  state=$(new_state_dir launch-prompt-gemini-apikey)
+  "$EV" arm "$state" t1 >/dev/null
+  out=$(fm_busy_classify tmux w1 gemini t1 "$state" 'Enter Gemini API Key
+> ')
+  [ "$out" = "unknown launch-prompt" ] \
+    || fail "a Gemini launch parked on the API-key entry dialog must classify unknown launch-prompt, got '$out'"
+  pass "a Gemini launch parked on its trust, auth-picker, or API-key dialog classifies unknown launch-prompt"
+}
+
+test_launch_prompt_never_shortens_a_working_launch() {
+  local state out
+  state=$(new_state_dir launch-prompt-working)
+  "$EV" arm "$state" t1 >/dev/null
+  # A genuinely working launch (Claude's ordinary busy footer, rendered before
+  # its own hook has posted a single event yet) must keep the normal busy
+  # bound rather than being shortened by this backstop.
+  out=$(fm_busy_classify tmux w1 claude t1 "$state" '• Working (6s • esc to interrupt)')
+  [ "$out" = "busy fm-spawn" ] \
+    || fail "a genuinely busy launch must not be reclassified, got '$out'"
+  pass "the launch-prompt backstop never reclassifies a genuinely working launch"
+}
+
+test_launch_prompt_scoped_to_armed_harnesses() {
+  local state out
+  # opencode ships no trust dialog (fm-busy-lib.sh header), so it has no
+  # signature at all: even Claude's own dialog text must not reclassify it.
+  state=$(new_state_dir launch-prompt-opencode)
+  "$EV" arm "$state" t1 >/dev/null
+  out=$(fm_busy_classify tmux w1 opencode t1 "$state" \
+    'Quick safety check: Is this a project you created or one you trust?')
+  [ "$out" = "busy fm-spawn" ] \
+    || fail "opencode has no launch-prompt signature and must stay busy fm-spawn, got '$out'"
+  pass "the launch-prompt backstop is scoped to harnesses with a verified signature"
+}
+
+test_launch_prompt_never_reclassifies_an_advanced_record() {
+  local state gen out
+  state=$(new_state_dir launch-prompt-advanced)
+  gen=$("$EV" arm "$state" t1)
+  "$EV" apply "$state" t1 busy --gen "$gen" --source claude-hook --event user-prompt-submit
+  out=$(fm_busy_classify tmux w1 claude t1 "$state" \
+    'Quick safety check: Is this a project you created or one you trust?')
+  [ "$out" = "busy claude-hook" ] \
+    || fail "a record that has advanced past fm-spawn must never be reclassified by pane text, got '$out'"
+  pass "the launch-prompt backstop only ever touches the untouched fm-spawn seed"
+}
+
+test_launch_prompt_requires_a_captured_tail() {
+  local state out
+  state=$(new_state_dir launch-prompt-no-tail)
+  "$EV" arm "$state" t1 >/dev/null
+  out=$(fm_busy_classify tmux w1 claude t1 "$state")
+  [ "$out" = "busy fm-spawn" ] \
+    || fail "with no captured tail the record's own state must stand, got '$out'"
+  pass "the launch-prompt backstop never runs without a captured tail"
 }
 
 test_grok_regex_isolated() {
@@ -381,12 +574,34 @@ test_boolean_view_never_promotes_unknown() {
   pass "the boolean view reports busy only on an exact busy verdict"
 }
 
+test_progress_is_generation_bound_and_not_semantic_state() {
+  local state gen replacement before
+  state=$(new_state_dir native-progress)
+  gen=$("$EV" arm "$state" t1)
+  before=$(cat "$state/t1.busy-state")
+  "$EV" progress "$state" t1 --gen "$gen" || fail "current progress was refused"
+  [ -f "$state/t1.progress" ] || fail "progress marker missing"
+  [ ! -e "$state/t1.turn-ended" ] || fail "progress emitted a completed turn"
+  [ "$(cat "$state/t1.busy-state")" = "$before" ] || fail "progress changed semantic state"
+  replacement=$("$EV" arm "$state" t1)
+  [ ! -e "$state/t1.progress" ] || fail "arm retained the previous incarnation's progress"
+  if "$EV" progress "$state" t1 --gen "$gen" 2>/dev/null; then fail "stale progress was accepted"; fi
+  [ ! -e "$state/t1.progress" ] || fail "stale progress wrote a marker"
+  "$EV" progress "$state" t1 --gen "$replacement" || fail "replacement progress was refused"
+  "$EV" retire "$state" t1 --gen "$replacement" || fail "retire failed"
+  [ ! -e "$state/t1.progress" ] || fail "retire retained progress"
+  pass "native progress is generation-bound, separately recorded, and cleared on arm and retire"
+}
+
+test_progress_is_generation_bound_and_not_semantic_state
+
 test_arm_seeds_busy_spawn
 test_apply_advances_seq_and_source
 test_apply_current_gen_reset
 test_apply_unarmed_refused
 test_retire_serializes_and_rejects_stale_gen
 test_retire_missing_sidecar_is_idempotent
+test_stale_lock_broken_under_gnu_stat
 test_stale_gen_event_rejected
 test_stale_gen_record_unknown
 test_missing_record_unknown_not_idle
@@ -394,6 +609,14 @@ test_malformed_record_unknown
 test_record_without_sidecar_unknown
 test_source_mismatch_cross_adapter
 test_converted_adapters_ignore_footer_text
+test_launch_prompt_claude_trust_dialog
+test_launch_prompt_pi_trust_dialog
+test_launch_prompt_pi_requires_both_markers
+test_launch_prompt_gemini_dialogs
+test_launch_prompt_never_shortens_a_working_launch
+test_launch_prompt_scoped_to_armed_harnesses
+test_launch_prompt_never_reclassifies_an_advanced_record
+test_launch_prompt_requires_a_captured_tail
 test_grok_regex_isolated
 test_codex_unverified_gate
 test_kimi_unverified_gate

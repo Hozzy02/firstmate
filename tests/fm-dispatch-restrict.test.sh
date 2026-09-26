@@ -25,13 +25,14 @@ RESTRICT="$ROOT/bin/fm-dispatch-restrict.sh"
 TMP_ROOT=$(fm_test_tmproot fm-dispatch-restrict)
 export FM_BACKEND=tmux
 
-# A fresh, isolated firstmate home with a project clone-shaped placeholder at
-# projects/alpha (the spawn gate runs before fm-spawn.sh ever needs that
-# directory to be a real git repo).
+# A fresh, isolated firstmate home with an empty git repo at projects/alpha:
+# spawn resolves the shared Treehouse project lock from a real repo before it
+# reaches the ordinary brief check.
 new_home() {  # <name>
   local name=$1 home
   home="$TMP_ROOT/$name"
   mkdir -p "$home/data" "$home/state" "$home/projects/alpha"
+  git init -q "$home/projects/alpha"
   printf '%s\n' "$home"
 }
 

@@ -35,6 +35,12 @@ assert_contains_local() {  # <haystack> <needle> <msg>
     *) fail "$3"$'\n'"--- got ---"$'\n'"$1" ;;
   esac
 }
+assert_not_contains_local() {  # <haystack> <needle> <msg>
+  case "$1" in
+    *"$2"*) fail "$3"$'\n'"--- got ---"$'\n'"$1" ;;
+    *) : ;;
+  esac
+}
 
 command -v herdr >/dev/null 2>&1 || { echo "skip: herdr not found"; exit 0; }
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the herdr adapter)"; exit 0; }
@@ -89,7 +95,14 @@ mkdir -p "$STATE" "$DATA/$ID" "$CONFIG"
 # Default-path backend resolution is what is under test here, so opt out of the
 # default-on presentation projection and keep the assertions on the flat per-home workspace.
 printf 'off\n' > "$CONFIG/herdr-presentation-spaces"
-printf 'trivial autodetect-smoke brief: nothing to do.\n' > "$DATA/$ID/brief.md"
+cat > "$DATA/$ID/brief.md" <<'EOF'
+# Task
+## Captain's intent
+Exercise Herdr backend auto-detection.
+
+## Firstmate spec
+Verify the real spawn path selects Herdr.
+EOF
 
 PROJ="$TMP_ROOT/scratch-project"
 mkdir -p "$PROJ"
@@ -112,10 +125,11 @@ env -u TMUX -u HERDR_ENV -u CMUX_WORKSPACE_ID -u FM_BACKEND PATH="$PATH" \
 status=$?
 [ "$status" -eq 0 ] || fail "fm-spawn.sh did not succeed on the default Herdr path"$'\n'"--- stdout ---"$'\n'"$(cat "$OUT_FILE")"$'\n'"--- stderr ---"$'\n'"$(cat "$ERR_FILE")"
 
-case "$(cat "$ERR_FILE")" in
-  *NOTICE*) fail "the no-marker default Herdr selection should emit no backend notice"$'\n'"$(cat "$ERR_FILE")" ;;
-esac
-pass "real Herdr: fm-spawn.sh selects Herdr by hard default with no explicit config or runtime marker"
+assert_not_contains_local "$(cat "$ERR_FILE")" "EXPERIMENTAL" \
+  "fm-spawn.sh's Herdr auto-detection retained the obsolete experimental label"
+assert_not_contains_local "$(cat "$ERR_FILE")" "--backend tmux to opt out" \
+  "fm-spawn.sh's Herdr auto-detection retained the obsolete tmux opt-out steer"
+pass "real herdr: fm-spawn.sh auto-detects verified herdr from HERDR_ENV=1 (no explicit config) without an opt-out steer"
 
 META="$STATE/$ID.meta"
 [ -f "$META" ] || fail "fm-spawn.sh did not write a meta file for $ID"
