@@ -31,9 +31,9 @@
 # docs/codex-app-backend.md owns that blocked backend contract.
 #
 # Compatibility contract: a task's meta may omit `backend=`; every reader here
-# treats that as `tmux` (fm_backend_of_meta), and fm-spawn.sh does not write
-# `backend=tmux` for a default-backend task, so existing and newly spawned
-# default-path metas stay byte-identical. Only a task spawned on a non-tmux
+# treats that as `tmux` (fm_backend_of_meta), and fm-spawn.sh never writes
+# `backend=tmux`, so existing legacy metas stay byte-identical. New default-path
+# spawns resolve to herdr and record it. Only a task spawned on a non-tmux
 # spawn-capable backend, currently herdr, zellij, orca, or cmux, carries an
 # explicit `backend=` line.
 #
