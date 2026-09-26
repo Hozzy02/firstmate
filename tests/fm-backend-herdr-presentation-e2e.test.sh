@@ -37,7 +37,7 @@ mkdir -p "$FAKEBIN"
 : > "$MOVE_CALL_LOG"
 : > "$FOCUS_AUDIT_LOG"
 REAL_MOVER="$ROOT/bin/backends/herdr-workspace-move.py"
-export REAL_HERDR REAL_TREEHOUSE REAL_MOVER HERDR_CALL_LOG TREEHOUSE_CALL_LOG TREEHOUSE_LOCK_DIR MOVE_CALL_LOG FOCUS_AUDIT_LOG HERDR_ORIGINAL_PATH HERDR_LAB_HELPER
+export REAL_HERDR REAL_TREEHOUSE REAL_MOVER HERDR_CALL_LOG WORKSPACE_CREATE_RESULT_LOG TREEHOUSE_CALL_LOG TREEHOUSE_LOCK_DIR MOVE_CALL_LOG FOCUS_AUDIT_LOG HERDR_ORIGINAL_PATH HERDR_LAB_HELPER
 export ACTIVE_SEEDED_CONTROL POST_CREATE_ABORT_CONTROL TMP_ROOT
 
 # Log every production-adapter call, remove its already-validated trailing
@@ -929,7 +929,7 @@ for ROUND in 1 2 3; do
   mkdir -p "$HOME_DIR/data/focus-$ROUND-a" "$HOME_DIR/data/focus-$ROUND-b"
   write_ship_brief "$HOME_DIR" "focus-$ROUND-a" "Projection focus wave $ROUND fixture A."
   write_ship_brief "$HOME_DIR" "focus-$ROUND-b" "Projection focus wave $ROUND fixture B."
-  WAVE_LOG_START=$(log_line_count)
+  WAVE_RESULT_START=$(projection_result_log_line_count)
   WAVE_FOCUS_START=$(focus_audit_line_count)
   spawn_task "focus-$ROUND-a" "$HOME_DIR" "$PROJECT_DIR" > "$TMP_ROOT/focus-$ROUND-a.out" 2> "$TMP_ROOT/focus-$ROUND-a.err" &
   WAVE_A_PID=$!
