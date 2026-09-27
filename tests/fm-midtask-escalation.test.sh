@@ -163,6 +163,28 @@ test_repeated_blocked_reports_suggest_up_and_rate_limit() {
   pass "fm-midtask-escalation: repeated blocked reports suggest up, once per new count"
 }
 
+test_a_later_blocked_episode_with_the_same_count_re_suggests() {
+  local home crew out
+  home=$(make_home blocked-episodes)
+  write_meta "$home" demo "branch=fm/no-run"
+  write_status "$home" demo \
+    "blocked [at=$(now)]: obstacle A" \
+    "blocked [at=$(now)]: obstacle A again"
+  crew=$(stub_crew_state "$TMP_ROOT/bin-episodes" "state: blocked · source: pane · idle")
+
+  out=$(FM_HOME="$home" FM_MIDTASK_CREW_STATE_BIN="$crew" PATH="$(no_nm_path)" "$TOOL" check demo)
+  assert_contains "$out" "reported blocked 2 time(s)" "the first episode suggests up"
+
+  printf 'resolved [at=%s]: fixed\nblocked [at=%s]: obstacle B\nblocked [at=%s]: obstacle B again\n' \
+    "$(now)" "$(now)" "$(now)" >> "$home/state/demo.status"
+  out=$(FM_HOME="$home" FM_MIDTASK_CREW_STATE_BIN="$crew" PATH="$(no_nm_path)" "$TOOL" check demo)
+  assert_contains "$out" "reported blocked 2 time(s)" "a later episode reaching the same count is new evidence"
+
+  out=$(FM_HOME="$home" FM_MIDTASK_CREW_STATE_BIN="$crew" PATH="$(no_nm_path)" "$TOOL" check demo)
+  assert_equals '' "$out" "the later episode is still reported only once"
+  pass "fm-midtask-escalation: a later blocked episode with the same count earns its own suggestion"
+}
+
 test_resolved_clears_the_blocked_streak() {
   local home crew out
   home=$(make_home resolved)
@@ -349,6 +371,7 @@ test_help_and_usage
 test_missing_meta_prints_nothing
 test_secondmate_is_skipped
 test_repeated_blocked_reports_suggest_up_and_rate_limit
+test_a_later_blocked_episode_with_the_same_count_re_suggests
 test_resolved_clears_the_blocked_streak
 test_declared_pause_does_not_count_as_stall
 test_old_failed_state_suggests_up

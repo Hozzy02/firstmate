@@ -125,10 +125,12 @@ check_id_for() { printf 'midtask-%s\n' "$1"; }  # <task-id> -> registered check 
 
 # --- evidence gathering -----------------------------------------------------
 
-# Sets ROUNDS_USED (highest ROUND any step needed, or empty when unknown).
-# Never fails the caller: any unreadable step just leaves it empty.
+# Sets ROUNDS_USED (highest ROUND any step needed, or empty when unknown) and
+# NM_RUN_ID (the selected run it was read from). Never fails the caller: any
+# unreadable step just leaves ROUNDS_USED empty.
 nm_evidence() {  # <worktree> <branch>
   ROUNDS_USED=''
+  NM_RUN_ID=''
   local worktree=$1 branch=$2 overview choice selected_id detail stats round
   [ -n "$worktree" ] && [ -d "$worktree" ] || return 0
   [ -n "$branch" ] || return 0
@@ -145,25 +147,28 @@ nm_evidence() {  # <worktree> <branch>
   round=$(printf '%s\n' "$stats" \
     | awk '$1 ~ /^(intent|rebase|review|test|document|lint|push|pr|ci)$/ && $2 ~ /^[0-9]+$/ {print $2}' \
     | sort -n | tail -1)
-  case "$round" in ''|*[!0-9]*) ;; *) ROUNDS_USED=$round ;; esac
+  case "$round" in ''|*[!0-9]*) ;; *) ROUNDS_USED=$round; NM_RUN_ID=$selected_id ;; esac
 }
 
 # Sets BLOCKED_COUNT (blocked: reports since the last resolved:/done:/failed:
-# event) and STALL_SECONDS (age of the last event's [at=] stamp, empty when
-# unknown).
+# event), BLOCKED_LINE (the status-log line number of the latest of those
+# reports, so a later episode reaching the same count is told apart), and
+# STALL_SECONDS (age of the last event's [at=] stamp, empty when unknown).
 status_evidence() {  # <status-file>
   BLOCKED_COUNT=0
+  BLOCKED_LINE=0
   STALL_SECONDS=''
-  local file=$1 line verb epoch last_epoch=''
+  local file=$1 line verb epoch last_epoch='' n=0
   if [ -f "$file" ]; then
     while IFS= read -r line || [ -n "$line" ]; do
+      n=$((n + 1))
       [ -n "$line" ] || continue
       verb=$(status_line_verb "$line")
       if epoch=$(status_line_at_epoch "$line" 2>/dev/null); then
         last_epoch=$epoch
       fi
       case "$verb" in
-        blocked) BLOCKED_COUNT=$((BLOCKED_COUNT + 1)) ;;
+        blocked) BLOCKED_COUNT=$((BLOCKED_COUNT + 1)); BLOCKED_LINE=$n ;;
         resolved|done|failed) BLOCKED_COUNT=0 ;;
       esac
     done < "$file"
@@ -197,11 +202,11 @@ decide() {  # <crew-state>
 
   if [ -n "$ROUNDS_USED" ] && [ "$ROUNDS_USED" -ge "$ROUND_THRESHOLD" ]; then
     reasons+=("no-mistakes used $ROUNDS_USED fix round(s) on a step (cap ~$ROUND_THRESHOLD)")
-    triggers+=("rounds=$ROUNDS_USED")
+    triggers+=("rounds=$ROUNDS_USED@$NM_RUN_ID")
   fi
   if [ "$BLOCKED_COUNT" -ge "$BLOCKED_THRESHOLD" ]; then
     reasons+=("reported blocked $BLOCKED_COUNT time(s) since its last resolved/done event")
-    triggers+=("blocked=$BLOCKED_COUNT")
+    triggers+=("blocked=$BLOCKED_COUNT@line$BLOCKED_LINE")
   fi
   if [ -n "$STALL_SECONDS" ] && [ "$STALL_SECONDS" -ge "$STALL_THRESHOLD" ]; then
     case "$crew_state" in
