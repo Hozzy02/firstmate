@@ -1,6 +1,6 @@
 ---
 name: stow
-description: Sweep the current session for uncaptured durable knowledge, file it to disk, and curate the home's tiered, decaying startup memory before a context reset. Use when the captain invokes /stow (e.g. "/stow", "stow what you've learned"), before a session reset or context compaction, or periodically to keep operational memory current.
+description: Sweep the current session for uncaptured durable knowledge, file it to disk, persist the open work records this session knows are unfiled or now wrong, and curate the home's tiered, decaying startup memory before a context reset. Use when the captain invokes /stow (e.g. "/stow", "stow what you've learned"), before a session reset or context compaction, or periodically to keep operational memory current.
 user-invocable: true
 metadata:
   internal: true
@@ -10,7 +10,7 @@ metadata:
 
 # stow
 
-Sweep this session for durable knowledge that exists only in conversation, then leave the next session with a compact current operating map rather than an accumulating journal.
+Sweep this session for durable knowledge and open-work record state that exist only in conversation, then leave the next session with a compact current operating map rather than an accumulating journal.
 Memory entries are tiered and decay between passes, and stale material retires to a cold archive instead of being deleted.
 This skill writes only through the existing Firstmate ownership and write boundaries.
 
@@ -20,6 +20,8 @@ Markers are compact trailing HTML comments, deliberately cheap because marker by
 
 - `<!--a:YYYY-MM-DD-->` - an `aging` entry; the embedded date is its last-reinforced date.
 - `<!--p:YYYY-MM-DD-->` - a `perishable` entry; the embedded date is its last-reinforced date.
+- `<!--a:YYYY-MM-DD/N-->` - only in a home that has opted in to the pass horizon below: either dated marker may carry `/N`, the number of passes that evaluated the entry without reinforcing it.
+  An absent `/N` means zero, so an entry the fleet keeps exercising costs no counter bytes at all, and a home that has not opted in never writes one.
 - `<!--P-->` - an explicitly `pinned` entry in a file whose default tier is not `pinned`.
 - `<!--g-->` - migration-only: an unconfirmed legacy entry that has consumed its one grace cycle, carrying no date because grace is not reinforcement.
 
@@ -27,6 +29,7 @@ Markers are compact trailing HTML comments, deliberately cheap because marker by
 - Treehouse pool slots share one repo, so workers must create their task branch before editing. <!--a:2026-08-03-->
 - While state/.afk exists, the away-daemon owns triage (until the afk-wake fix lands; tracked: afk-pi-wake-bypass-r1). <!--p:2026-07-20-->
 - Never restart the shared no-mistakes daemon while runs are active. <!--P-->
+- Codex writes its trust prompt to stderr, not stdout. <!--a:2026-07-28/6-->
 ```
 
 The tier names say what the pass does with an entry:
@@ -43,12 +46,32 @@ Marking rules:
 - An entry matching its file's `pinned` default carries no marker at all; every `aging` and `perishable` entry always carries its dated marker, whose letter names the tier, so a clock-carrying entry is never ambiguous with unmarked legacy material.
 - Marker and header-pointer bytes count toward the startup-memory budget: the pass's own bookkeeping is costed content, never free, which is why the spellings above are as short as they are.
 - Each memory file's header carries at most a one-line pointer naming this skill as the scheme owner, such as `<!-- memory tiers: see the stow skill -->`.
-  This skill text is the single owner of tier semantics, marker spellings, and clocks - deliberately policy, not configuration - and no memory file header may restate them.
+  This skill text is the single owner of tier semantics, marker spellings, and clocks, and no memory file header may restate them.
+  The one exception is the `config/stow-pass-horizon` presence flag below, which turns a single extra horizon on for this home and changes nothing else on this page.
 - Inspect each editable file's header pointer on every pass and add or correct it; for a read-only `data/captain-shared.md`, leave the file byte-identical and route a missing or outdated pointer to the primary owner.
   The required receipt action for that file is `routed`, not `unchanged`; name the ownership exception and do not declare the session reset-safe.
 - A pre-existing missing or hand-dropped marker is never grounds for destructive treatment: it means the file's default tier; an unmarked entry in a default-pinned file is simply pinned, while an unmarked entry in a file whose default tier carries a clock follows the migration rule below.
 
 Decay advances only when a pass runs, so a home stowed less often than a clock experiences that clock at its stow interval.
+
+### Optional pass horizon (config/stow-pass-horizon)
+
+The wall-clock horizons above are this skill's default contract, and a home gets exactly them unless it asks for more.
+A home may opt in to a second, per-pass horizon by creating the local, gitignored `config/stow-pass-horizon` presence flag.
+While that file is absent nothing else in this section applies: no counter is written, no counter already in a file is read, and every entry decays on its date alone.
+
+Opt in where admission and decay are not commensurable.
+A pass admits the findings that pass produced, so growth is a per-pass quantity, while a wall-clock horizon alone is a per-day one.
+In a home that stows daily those two rates diverge by the stow cadence, an entry the fleet keeps exercising never sits unreinforced for 30 wall-clock days, and the date horizon is evaluated vacuously every pass while the file only grows.
+A home stowed monthly already exceeds its date horizon on a single pass and gains nothing from the flag.
+
+While the flag is present:
+
+- An `aging` entry is stale at whichever horizon it reaches first: 10 passes that evaluated it without reinforcing it, or 30 days since its last-reinforced date.
+- A `perishable` entry is stale at whichever it reaches first: 3 unreinforced passes, or 7 days.
+- Reinforcement refreshes the date and clears the counter, and nothing else clears it, so the evidence hard rule in step 4 stays the only way an entry renews its lease.
+- An existing dated marker with no `/N` reads as counter zero, so a home that opts in migrates nothing.
+- Removing the flag returns the home to the default contract on its next pass: any `/N` already written is then neither read nor advanced, and is left in place rather than rewritten.
 
 ## Required startup-memory pass
 
@@ -72,10 +95,12 @@ Every `/stow` invocation performs this complete pass, even when the session cont
    Retain lower-utility material only while budget remains.
 4. Reinforce and stamp.
    Refresh an entry's last-reinforced date to today only when this session actually exercised, confirmed, or re-derived it.
+   Where the optional pass horizon is enabled, refreshing that date also clears the entry's unreinforced-pass counter, and nothing else clears it.
    **Hard rule: reinforcement requires independent evidence from this session that you can name in the receipt; plausibility, importance, prior knowledge, and the entry's own text are not evidence, and any explicit statement that no confirming session evidence exists requires the no-evidence path.**
    For an unmarked `data/learnings.md` entry with no such evidence, the no-evidence path is always to append `<!--g-->` and retain it for this entire pass; never stamp or archive it during that same invocation.
    Stamp each newly written entry with today's date and its tier per the marking rules, and admit a new `perishable` entry only with its named checkable expiry condition in the prose.
 5. Evaluate every dated entry in each editable memory file against its tier clock.
+   Where the optional pass horizon is enabled, first increment the unreinforced-pass counter of every dated entry step 4 did not reinforce - that increment is the pass tick - then judge each dated entry against both of its horizons and treat it as stale at whichever it reaches first.
    Re-validate a stale `aging` entry from current evidence and refresh its date, or archive it.
    Re-confirm a stale `perishable` entry against its named condition: still open means refresh the date, while resolved, expired, or no longer checkable means archive it in this pass.
    Promote `perishable` to `aging` when its condition keeps proving durable past its expected life, and retier in place when a supersession changes an entry's lifetime.
@@ -108,6 +133,7 @@ Never describe the session as reset-safe while the memory total is over budget o
 
 Stale never means deleted: pruning an entry from an editable memory file always means moving it to `data/memory-archive.md`, this home's append-only, never-injected cold tier, gitignored with the rest of `data/` and never counted by the budget report.
 Each archived entry keeps its provenance under a dated pass heading: source file, tier, last-reinforced date, and the reason it left.
+Include the unreinforced-pass counter only when the optional pass horizon itself made the entry stale, using the exact reason `unreinforced <N>p`; omit the counter when the wall-clock horizon or any other reason caused archival, even if the active marker carried one.
 Archive provenance stays verbose rather than compact because the cold tier is never budget-counted.
 
 ```markdown
@@ -115,7 +141,7 @@ Archive provenance stays verbose rather than compact because the cold tier is ne
 - (from learnings.md, tier: perishable, reinforced: 2026-06-30) While state/.afk exists, the away-daemon owns triage... [archived: unreinforced 39d]
 ```
 
-Reasons include `unreinforced <N>d`, `budget oldest-first`, and `legacy-unvalidated`.
+Reasons include `unreinforced <N>d`, `unreinforced <N>p`, `budget oldest-first`, and `legacy-unvalidated`.
 Archiving is a move, not a removal, and recovery is `grep` plus copy back with no tooling.
 Each home keeps its own archive, the archive never cascades, and truncating a grown archive is a captain decision, not a mechanism.
 
@@ -154,8 +180,8 @@ Approved project-level destinations are not produced by stow: they ship normally
   Because this destination is local and untracked, it is also the JIT home for private conditional knowledge that no committed surface may hold.
 - An already-existing user-owned local on-demand note with an established trigger, after confirming it is untracked, private, and able to hold the quoted entry.
   The pass may add the entry to that existing owner but never creates a new note, skill, or trigger for this purpose.
-- A project's existing committed `AGENTS.md`, for project-intrinsic knowledge useful to nearly every session of that project, through a normal crewmate ship task using `bin/fm-ensure-agents-md.sh` and the project's registered delivery mode.
-- A project-level skill in the project's own repository, for situation-conditional knowledge within one project, through the same ship-task path.
+- A project-level skill in the project's own repository, for situation-conditional knowledge within one project, through a normal ship task and the project's registered delivery mode.
+  A project's committed `AGENTS.md` is never an offload destination: crewmates correct it but only humans extend it (AGENTS.md section 6).
 
 Forbidden destinations: any firstmate-repo-tracked skill per the hard rule; firstmate's own `AGENTS.md`, which is always-loaded for every fleet session; `docs/` alone, which is never agent-loaded on demand, though a skill body may point into docs for depth; and any committed surface for private content.
 A local skill exists only in this home, so offloading an entry out of `data/captain-shared.md` removes it from every inheriting home's always-injected memory: the proposal must say so, and the default for shared entries is keep.
@@ -164,10 +190,10 @@ A local skill exists only in this home, so offloading an entry out of `data/capt
 
 1. Reduce non-pinned material now.
    For each eligible non-pinned candidate, record its first line, source file, estimated tokens, one-line trigger, live destination, privacy and visibility verdict, and actual budget relief in the completion receipt.
-   Autonomously relocate it only by adding it to an already-existing allowed JIT note, or by routing it through a project's established delivery path to its existing owning `AGENTS.md`, then confirming that destination holds the quoted entry before removing the memory entry.
+   Autonomously relocate it only by adding it to an already-existing allowed JIT note, or by routing it through a project's established delivery path to an already-existing allowed project-level destination, then confirming that destination holds the quoted entry before removing the memory entry.
    A destination that needs creation, uncompleted project delivery, or any other future work is not live and cannot count as relief, so continue with the next archival or eviction rung instead of leaving an over-budget proposal pending.
 2. Propose pinned relocation only.
-   For a pinned candidate, append a `proposed-offload` section with the same fields to the completion receipt and create or refresh one durable captain-held backlog item using `tasks-axi add`, `tasks-axi hold`, `tasks-axi show <id> --full`, and `tasks-axi update <id> --body-file <path>` as appropriate.
+   For a pinned candidate, append a `proposed-offload` section with the same fields to the completion receipt, create or refresh one durable backlog item with `bin/fm-tasks-axi.sh add`, `bin/fm-tasks-axi.sh show <id> --full`, and `bin/fm-tasks-axi.sh update <id> --body-file <path>` as appropriate, then hold it through `bin/fm-captain-hold.sh hold`.
    Preserve each candidate's approval state in that item, and require explicit plain-chat approval for that named item before any migration.
    If the captain never answers, nothing migrates and the held item persists, but it is never treated as budget relief.
 3. Migrate an approved pinned candidate outside this pass.
@@ -194,10 +220,10 @@ A local skill exists only in this home, so offloading an entry out of `data/capt
      Create `data/learnings.md` only for a genuinely new local learning with no stronger owner.
    - In a primary home, curate shared captain preferences only under the existing primary-authoritative shared-preference contract.
      In a secondmate home, route a newly discovered shared preference to the main firstmate through marked status or a document pointer instead of editing the inherited file.
-   - Project-intrinsic knowledge never goes directly into a project's `AGENTS.md`.
-     Route it through a normal ship task so a crewmate records it with `bin/fm-ensure-agents-md.sh` and the project's delivery path.
+   - Project-intrinsic knowledge never goes into a project's `AGENTS.md` through this fleet: a crewmate edits those files only to correct factually wrong information (AGENTS.md section 6), so no ship task carries an addition.
+     Keep the candidate in `data/learnings.md` or surface it in the completion receipt so the captain can extend the file by hand.
    - Knowledge general to every Firstmate user belongs in this repo's shared tracked material through the normal branch, no-mistakes, PR, and captain-merge path.
-   - For task-scoped notes, inspect the item with `tasks-axi show <id> --full`, classify the change as new, duplicate, superseding, or obsolete, then use a considered replacement body through `tasks-axi update <id> --body-file <path>`.
+   - For task-scoped notes, inspect the item with `bin/fm-tasks-axi.sh show <id> --full`, classify the change as new, duplicate, superseding, or obsolete, then use a considered replacement body through `bin/fm-tasks-axi.sh update <id> --body-file <path>`.
      Use `--archive-body` when recoverability matters.
      Never append.
    - File each undone next step as a queued backlog item with a genuine `blocked-by` dependency when applicable.
@@ -206,6 +232,17 @@ A local skill exists only in this home, so offloading an entry out of `data/capt
    The only graduation moves are promotion to tracked shared material through a PR, folding a learning into the captain-preference destination selected by AGENTS.md, archiving a stale entry to `data/memory-archive.md`, autonomous offload of an eligible non-pinned conditional entry to an already-existing allowed owner through the reduce flow above, captain-approved offload of a pinned durable conditional entry to a JIT-loaded owner executed through the migration step above, or deletion of an entry that is a duplicate or already preserved through a stronger existing owner.
    A stale unique fact is never deleted, only archived.
    Do not invent another graduation path.
+
+## Open-record persistence
+
+The sweep above preserves knowledge; this one preserves the state of work.
+A reset destroys whatever exists only in this session, and that includes what you have learned about work already under way, not just facts worth remembering.
+So before the reset, make sure the important open work you are holding in context is durably recorded: file what was never filed, and correct what you now know is stale.
+
+Judge for yourself what is important and which record each thing belongs to, and write it through the owner that already governs that record.
+One bound holds: this covers the open work you are actually holding in context, not the records at large.
+It is not a reconciliation of durable records against repository or forge reality, cannot become one on input this volatile, and must never be reported as one.
+Where the right correction is a judgment you cannot make, leave the record alone and raise the question instead of guessing.
 
 ## One-time migration of unmarked entries
 
@@ -227,8 +264,11 @@ Report the outcome in plain captain-facing language with all of these facts:
 - each durable finding filed outside memory and its authoritative owner;
 - each archived entry's reason, each autonomous offload's live destination and actual relief, and, when a pinned candidate was proposed, the `proposed-offload` section with every candidate's fields;
 - every unresolved exception, including a primary-owned shared-file constraint in a secondmate home, and every concrete captain decision opened for an over-budget result;
-- whether the session is safe to reset, only when all durable findings are captured and the post-pass result is within budget with no exception or pending budget decision.
+- each open record this pass filed or corrected, and each one it deliberately left alone with the judgment it is waiting on;
+- whether the session is safe to reset, only when all durable findings are captured, every open record this session held is filed or explicitly left with its reason, and the post-pass result is within budget with no exception or pending budget decision.
 
+State what reset-safe means in the same breath as the claim: nothing this session knew has been lost.
+It is never a claim that the home's durable records are correct, because this pass checks no record the session did not name.
 Do not hide an over-budget result behind a reset-safe claim.
 In a primary home the receipt is written after the cascade below, not instead of it.
 

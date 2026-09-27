@@ -6,11 +6,12 @@
 # data/fm-backend-design-d7/herdr-addendum.md ("Events as the core
 # abstraction"). P1 extracted the tmux command sequences that fm-send.sh,
 # fm-peek.sh, fm-watch.sh, fm-spawn.sh, and fm-teardown.sh already ran inline
-# into bin/backends/tmux.sh, with those SAME command sequences, so legacy tmux
-# behavior stays intact. P2 added bin/backends/herdr.sh, now the verified
-# reference backend and hard default, behind `--backend herdr`/`FM_BACKEND=herdr`/
-# `config/backend`, runtime auto-detection, or the final new-spawn fallback; see
-# herdr-addendum.md and data/fm-backend-design-d7/herdr-verification-p2.md for
+# into bin/backends/tmux.sh, with those SAME command sequences, so the default
+# (tmux) path stays byte-identical. P2 adds bin/backends/herdr.sh, a verified
+# spawn-capable backend with its own required CI lane, behind `--backend
+# herdr`/`FM_BACKEND=herdr`/`config/backend`, and behind runtime auto-detection
+# when firstmate itself is running inside herdr with no explicit backend setting;
+# see herdr-addendum.md and data/fm-backend-design-d7/herdr-verification-p2.md for
 # its empirical basis.
 # P3 adds bin/backends/zellij.sh, also EXPERIMENTAL and spawn-capable, behind
 # `--backend zellij`/`FM_BACKEND=zellij`/`config/backend` - NOT behind runtime
@@ -29,12 +30,12 @@
 # Codex App is intentionally not in the known set yet.
 # docs/codex-app-backend.md owns that blocked backend contract.
 #
-# Compatibility contract: new-spawn resolution and recorded-meta interpretation
-# are deliberately distinct. fm_backend_name defaults a NEW spawn to herdr, and
-# fm-spawn.sh writes `backend=herdr`; fm_backend_of_meta still treats an absent
-# `backend=` as tmux so every legacy recorded endpoint remains correctly routed.
-# tmux continues to omit its redundant explicit field, while every non-tmux
-# backend carries an explicit `backend=` line.
+# Compatibility contract: a task's meta may omit `backend=`; every reader here
+# treats that as `tmux` (fm_backend_of_meta), and fm-spawn.sh never writes
+# `backend=tmux`, so existing legacy metas stay byte-identical. New default-path
+# spawns resolve to herdr and record it. Only a task spawned on a non-tmux
+# spawn-capable backend, currently herdr, zellij, orca, or cmux, carries an
+# explicit `backend=` line.
 #
 # Event-source framing (herdr-addendum "Events as the core abstraction"): a
 # backend's supervision surface is conceptually an EVENT SOURCE - it produces
@@ -56,10 +57,10 @@ FM_BACKEND_CONFIG_DIR="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
 # Verified backend adapters. Extend only after a backend gets its own
 # bin/backends/<name>.sh and empirical verification, mirroring AGENTS.md
-# section 4's harness-verification discipline. herdr is the verified reference
-# backend; docs/herdr-backend.md owns its current limits and
-# docs/verification/runtime-backends.md owns active empirical evidence.
-# tmux remains a fully supported legacy alternative. zellij is EXPERIMENTAL (P3;
+# section 4's harness-verification discipline. herdr is verified (P2;
+# data/fm-backend-design-d7/herdr-addendum.md) and has its own required CI lane,
+# with current coverage in docs/herdr-backend.md and
+# docs/verification/runtime-backends.md. zellij is EXPERIMENTAL (P3;
 # data/fm-backend-design-d7/report.md "Zellij Backend") - verified against the
 # real 0.44.0 binary (docs/zellij-backend.md). orca is EXPERIMENTAL and
 # spawn-capable; unlike tmux/herdr/zellij it is also the worktree provider.
@@ -234,10 +235,10 @@ fm_backend_detect_cmux_app_is_ancestor() {
 # per-task `--backend` flag is parsed by the caller (fm-spawn.sh) and takes
 # precedence over this resolution entirely; it is not read here. Auto-detect
 # fires only when nothing was explicitly configured, so an explicit setting
-# always wins. Auto-detected tmux prints one loud stderr notice naming the
-# herdr opt-out because tmux is now the legacy alternative; auto-detected herdr
-# stays silent. Auto-detected cmux retains its experimental notice. The cmux
-# notice names the winning signal, so a fallback-detected cmux (bundle id or
+# always wins. Auto-detected herdr stays silent; auto-detected tmux prints an
+# opt-out notice now that herdr is the new-spawn default. Selecting cmux via
+# auto-detect prints one loud stderr notice because cmux remains experimental;
+# the notice names the winning signal, so a fallback-detected cmux (bundle id or
 # ancestry, after the claude wrapper stripped CMUX_WORKSPACE_ID) is visibly
 # distinct from the primary-marker case.
 fm_backend_name() {
@@ -300,9 +301,9 @@ fm_backend_validate_spawn() {  # <name>
 # single owner of the per-backend dependency delta, so bootstrap follows the
 # RESOLVED backend instead of demanding an inactive backend's tools. Each set is:
 #   - the session-provider CLI itself (tmux/herdr/zellij/orca/cmux);
-#   - jq for herdr and the JSON-emitting experimental zellij/cmux adapters,
-#     whose spawn/liveness paths parse JSON output (see each adapter's tool
-#     check, e.g. fm_backend_herdr_tool_check);
+#   - jq, for the JSON-emitting adapters (herdr, zellij, cmux) whose spawn/liveness
+#     paths parse the backend's JSON output (see each adapter's
+#     tool check, e.g. fm_backend_herdr_tool_check);
 #   - the treehouse worktree provider for every session-provider-only backend
 #     (tmux, herdr, zellij, cmux); orca owns its own task worktree and terminal,
 #     so it drops both treehouse and any other backend's session CLI.
@@ -336,9 +337,14 @@ fm_backend_required_tool_available() {  # <backend> <tool>
 # errors) if the file or key is absent. Mirrors the ad hoc `grep '^key=' |
 # tail -1 | cut -d= -f2-` snippet every fm-*.sh script used to repeat inline.
 fm_meta_get() {  # <meta-file> <key>
-  local meta=$1 key=$2
+  local meta=$1 key=$2 line value=''
   [ -f "$meta" ] || return 0
-  grep "^$key=" "$meta" 2>/dev/null | tail -1 | cut -d= -f2- || true
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      "$key="*) value=${line#*=} ;;
+    esac
+  done < "$meta" 2>/dev/null || true
+  printf '%s' "$value"
 }
 
 # fm_backend_of_meta: read a RECORDED endpoint's backend, defaulting to `tmux`
@@ -381,6 +387,25 @@ fm_backend_meta_exact_value() {  # <meta-file> <key>
 fm_backend_endpoint_atom_valid() {  # <value>
   case "$1" in
     ''|*[!A-Za-z0-9._@%+-]*) return 1 ;;
+  esac
+}
+
+# An Orca worktree id is the composite `<orca id>::<absolute worktree path>`
+# that Orca itself returns, so the `:` and `/` characters every real value
+# carries make the simple-atom check reject it. Firstmate hands the id back to
+# Orca opaquely and resolves it through Orca before removing anything, so this
+# proves only the shape that can name one worktree: both halves of the first
+# `::` split present, and the path half absolute.
+fm_backend_orca_worktree_id_valid() {  # <value>
+  case "$1" in
+    *$'\n'*|*$'\r'*|*$'\t'*) return 1 ;;
+    *::*) ;;
+    *) return 1 ;;
+  esac
+  [ -n "${1%%::*}" ] || return 1
+  case "${1#*::}" in
+    /*) ;;
+    *) return 1 ;;
   esac
 }
 
@@ -504,7 +529,7 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
       }
       if [ "$window" != "fm-$id" ] \
         || ! fm_backend_endpoint_atom_valid "$terminal" \
-        || ! fm_backend_endpoint_atom_valid "$worktree_id"; then
+        || ! fm_backend_orca_worktree_id_valid "$worktree_id"; then
         echo "REFUSED: Orca endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
         return 1
       fi
@@ -593,42 +618,77 @@ fm_backend_expected_label_of_selector() {  # <raw-target> <state-dir>
 # Each adapter is an independently linted canonical root. The /dev/null source
 # boundaries keep runtime dispatch from importing all five adapter ASTs into
 # every dispatcher consumer while preserving the runtime source operations.
+# Bash 3.2 can enter an EXIT trap with status 0 after `set -e` aborts on a
+# missing or unreadable dot-sourced file, and a newer Bash can print that
+# diagnostic and keep going. Both report a successful teardown. Prove the
+# adapter and the siblings it sources are readable regular files before `.`.
+fm_backend_source_readable() {  # <path>
+  [ -f "$1" ] && [ -r "$1" ]
+}
+
 fm_backend_source() {  # <name>
-  local name=$1
+  local name=$1 adapter rel path siblings
   fm_backend_validate "$name" || return 1
+  adapter="$FM_BACKEND_LIB_DIR/backends/$name.sh"
+  case "$name" in
+    tmux)
+      siblings="fm-tmux-lib.sh fm-composer-lib.sh fm-cursor-lib.sh fm-session-lock-lib.sh fm-agent-process-lib.sh fm-gemini-lib.sh"
+      ;;
+    herdr)
+      siblings="fm-composer-lib.sh fm-transition-lib.sh fm-agent-process-lib.sh fm-session-lock-lib.sh fm-gemini-lib.sh"
+      ;;
+    zellij)
+      siblings="fm-backend-hometag-lib.sh fm-composer-lib.sh"
+      ;;
+    orca)
+      siblings="fm-composer-lib.sh"
+      ;;
+    cmux)
+      siblings="fm-backend-hometag-lib.sh fm-composer-lib.sh"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  fm_backend_source_readable "$adapter" || return 1
+  # shellcheck disable=SC2086 # sibling names are a fixed space-separated list
+  for rel in $siblings; do
+    path="$FM_BACKEND_LIB_DIR/$rel"
+    fm_backend_source_readable "$path" || return 1
+  done
   case "$name" in
     tmux)
       if [ -z "${_FM_BACKEND_TMUX_SOURCED:-}" ]; then
         # shellcheck source=/dev/null
-        . "$FM_BACKEND_LIB_DIR/backends/tmux.sh" || return 1
+        . "$adapter" || return 1
         _FM_BACKEND_TMUX_SOURCED=1
       fi
       ;;
     herdr)
       if [ -z "${_FM_BACKEND_HERDR_SOURCED:-}" ]; then
         # shellcheck source=/dev/null
-        . "$FM_BACKEND_LIB_DIR/backends/herdr.sh" || return 1
+        . "$adapter" || return 1
         _FM_BACKEND_HERDR_SOURCED=1
       fi
       ;;
     zellij)
       if [ -z "${_FM_BACKEND_ZELLIJ_SOURCED:-}" ]; then
         # shellcheck source=/dev/null
-        . "$FM_BACKEND_LIB_DIR/backends/zellij.sh" || return 1
+        . "$adapter" || return 1
         _FM_BACKEND_ZELLIJ_SOURCED=1
       fi
       ;;
     orca)
       if [ -z "${_FM_BACKEND_ORCA_SOURCED:-}" ]; then
         # shellcheck source=/dev/null
-        . "$FM_BACKEND_LIB_DIR/backends/orca.sh" || return 1
+        . "$adapter" || return 1
         _FM_BACKEND_ORCA_SOURCED=1
       fi
       ;;
     cmux)
       if [ -z "${_FM_BACKEND_CMUX_SOURCED:-}" ]; then
         # shellcheck source=/dev/null
-        . "$FM_BACKEND_LIB_DIR/backends/cmux.sh" || return 1
+        . "$adapter" || return 1
         _FM_BACKEND_CMUX_SOURCED=1
       fi
       ;;
@@ -707,6 +767,36 @@ fm_backend_capture() {  # <backend> <target> <lines> [expected-label]
   esac
 }
 
+# FM_BACKEND_VISIBLE_CAPTURE: backends with a verified viewport-only read, each
+# implementing fm_backend_<name>_visible_capture. This one list answers both the
+# capability question and the dispatch, so they cannot disagree. cmux is absent
+# pending live verification: its `read-screen` without `--scrollback` plausibly
+# reads only the viewport, but that has not been observed on a real cmux, and
+# the adapter's own capture opts into history with `--scrollback`. orca's
+# `terminal read --limit` is a history read with no viewport mode.
+FM_BACKEND_VISIBLE_CAPTURE="tmux herdr zellij"
+
+# fm_backend_visible_capture_supported: whether <backend> can read the visible
+# viewport WITHOUT scrollback. Callers that must not mistake a scrolled-away
+# frame for the live screen ask this first and fail closed on a no.
+fm_backend_visible_capture_supported() {  # <backend>
+  fm_backend_list_contains "$FM_BACKEND_VISIBLE_CAPTURE" "$1"
+}
+
+# fm_backend_visible_capture: the visible viewport, never scrollback. A backend
+# outside FM_BACKEND_VISIBLE_CAPTURE declines here rather than answering with a
+# history-backed capture the caller would read as the live screen.
+fm_backend_visible_capture() {  # <backend> <target> [expected-label]
+  local backend=$1
+  shift
+  fm_backend_visible_capture_supported "$backend" || {
+    echo "error: backend '$backend' has no verified viewport-bounded capture primitive" >&2
+    return 1
+  }
+  fm_backend_source "$backend" || return 1
+  "fm_backend_${backend}_visible_capture" "$@"
+}
+
 # fm_backend_send_key: one backend-supported named special key.
 fm_backend_send_key() {  # <backend> <target> <key> [expected-label]
   local backend=$1
@@ -739,9 +829,18 @@ fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sl
   esac
 }
 
-# fm_backend_kill: remove the task's session endpoint (best-effort; a
-# nonexistent/already-gone target is not an error - callers already swallow
-# failures here exactly as the inline `tmux kill-window ... || true` did).
+# fm_backend_kill: remove the task's session endpoint. An already-gone target
+# is NOT an error and returns 0 silently, so ordinary cleanup of an
+# already-exited session stays quiet. A nonzero return means the close could
+# not do its job and the endpoint may still be live: the caller owns that
+# refusal and must not delete the durable records that are the only thing
+# naming the endpoint (bin/fm-teardown.sh's retain-and-stop path).
+# How much each adapter can prove differs, and no arm ever guesses: tmux
+# resolves a failed close against the window's exact recorded identity, Orca
+# reports a close its missing CLI never attempted, and the remaining arms
+# still report 0 for a close command that failed after being accepted.
+# docs/verification/runtime-backends.md "Endpoint close" is the per-backend
+# record.
 fm_backend_kill() {  # <backend> <target>
   local backend=$1
   shift
@@ -880,12 +979,17 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
 #   ambiguous  - the endpoint exists but its process cannot be attributed.
 #   unreadable - a target or inventory read failed or contradicted itself.
 #   unverified - this backend has no recovery classifier.
-# Only `dead` and `missing` license recovery. The tmux adapter requires a
-# successful session inventory and returns `missing` only when it omits the
-# exact window; the Herdr adapter reuses its husk
-# classifier. Zellij remains unverified because its secondmate ghost-tab and
-# agent-process recovery path has not been empirically validated. Orca and cmux
-# do not support secondmate spawns.
+# Only `dead` and `missing` license recovery. Every `alive` is proven at
+# process level through the shared classifier in bin/fm-agent-process-lib.sh,
+# never from a registration or a rendered title alone. The tmux adapter
+# requires a successful session inventory and returns `missing` only when it
+# omits the exact window; the Herdr adapter reuses its strict husk classifier -
+# which verifies a registered agent against `pane process-info` and the real
+# process table, so a registration Herdr kept over a shell-only pane reads
+# `dead` here (issue #4115) - then maps a positively stopped session server to
+# `missing` only in this recovery-grade view. Zellij remains unverified because
+# its secondmate ghost-tab and agent-process recovery path has not been
+# empirically validated. Orca and cmux do not support secondmate spawns.
 fm_backend_agent_state() {  # <backend> <target>
   local backend=$1 target=$2
   fm_backend_source "$backend" || { printf 'unverified'; return 0; }

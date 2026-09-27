@@ -12,6 +12,12 @@
 # The pre-existing fast-forward / already-current / local-only / no-origin paths
 # must be unchanged, and bootstrap must relay the new outcomes as FLEET_SYNC lines.
 #
+# It also pins the clone-root guard: a plain directory under projects/ resolves,
+# through git's upward repository discovery, to the ENCLOSING repository - in a
+# firstmate home, the firstmate checkout itself - so it must be skipped by name
+# with the enclosing repo left untouched, in both the whole-fleet and
+# single-project forms, while a symlinked clone dir still syncs.
+#
 # It also pins the orphaned .git/packed-refs.lock recovery in the fetch step
 # (fetch_with_packed_refs_lock_guard, backed by bin/fm-lock-lib.sh's shared
 # staleness proof): a provably-stale lock is retried then removed and the clone
@@ -88,6 +94,40 @@ run_sync() {
   local home=$1
   shift
   FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-fleet-sync.sh" "$@" 2>/dev/null
+}
+
+# build_enclosing_home <name>: an FM_HOME that is itself nested inside another git
+# repository - firstmate's own layout, where projects/ sits inside the firstmate
+# checkout. The enclosing repo is a clean clone of a bare origin that is one commit
+# ahead, so a sync that walked git discovery UP out of projects/<dir> would find a
+# fast-forward available and visibly take it. Echoes the enclosing repo, which is
+# also the home. Its work tree is left pristine so the only thing under projects/
+# is what the test puts there.
+build_enclosing_home() {
+  local name=$1 root work remote enclosing remote_abs
+  root="$TMP_ROOT/enclosing-$name"
+  work="$root/work"
+  remote="$root/remote.git"
+  enclosing="$root/enclosing"
+  mkdir -p "$root"
+
+  git init -q "$work"
+  git -C "$work" symbolic-ref HEAD refs/heads/main
+  printf '/projects/\n' > "$work/.gitignore"
+  git -C "$work" add .gitignore
+  commit_file "$work" AGENTS.md v0 C0
+
+  git clone --quiet --bare "$work" "$remote"
+  remote_abs=$(cd "$remote" && pwd)
+  git -C "$work" remote add origin "file://$remote_abs"
+  git -C "$work" push -q -u origin main
+
+  git clone --quiet "file://$remote_abs" "$enclosing"
+  commit_file "$work" AGENTS.md v1 C1
+  git -C "$work" push -q origin main
+
+  mkdir -p "$enclosing/projects"
+  printf '%s\n' "$enclosing"
 }
 
 # --- packed-refs.lock fixtures ----------------------------------------------
@@ -370,6 +410,27 @@ test_local_only_skipped() {
   pass "local-only clone is skipped (benign), not flagged STUCK"
 }
 
+# A registry entry the parser refuses resolves to no posture at all, so sync must
+# skip the clone rather than fall back to the default posture: reading a refusal
+# as "no-mistakes" is how a local-only clone would be fetched and fast-forwarded.
+test_unresolvable_registry_posture_skipped() {
+  local home clone out before
+  home=$(new_home)
+  clone=$(build_pair "$home" omicron)
+  advance_origin "$home" omicron C1
+  before=$(head_sha "$clone")
+  mkdir -p "$home/data"
+  printf -- '- omicron [local-only forge=githb] - test project (added 2026-06-27)\n' > "$home/data/projects.md"
+
+  out=$(run_sync "$home" "$clone")
+
+  assert_contains "$out" "omicron: skipped: registry entry does not resolve to a delivery posture" \
+    "a refused registry entry was not reported as a skip"
+  assert_not_contains "$out" "STUCK" "a refused registry entry was escalated to STUCK"
+  [ "$(head_sha "$clone")" = "$before" ] || fail "a clone whose registry entry was refused was still fast-forwarded"
+  pass "a clone whose registry entry the parser refuses is skipped, never synced on the default posture"
+}
+
 test_single_project_by_bare_name_resolves() {
   local home out
   home=$(new_home)
@@ -582,6 +643,57 @@ test_transient_packed_refs_lock_self_clears() {
   pass "a transient packed-refs.lock that self-clears is retried without a force-remove"
 }
 
+test_non_clone_dir_never_syncs_the_enclosing_repo() {
+  local home before out after
+  home=$(build_enclosing_home nonclone)
+  # A worktree container, not a clone: the repo is one level BELOW it.
+  mkdir -p "$home/projects/not-a-clone/wt"
+  before=$(head_sha "$home")
+
+  out=$(run_sync "$home")
+  after=$(head_sha "$home")
+
+  assert_contains "$out" "not-a-clone: skipped: not a clone root" \
+    "a non-repo directory under projects/ must be skipped by name"
+  assert_not_contains "$out" "not-a-clone: synced" \
+    "a non-repo directory must never be reported as a synced project"
+  [ "$before" = "$after" ] || \
+    fail "fleet-sync fast-forwarded the enclosing repo ($before -> $after) under a project's label"
+  pass "a non-repo directory under projects/ never fast-forwards the enclosing repo"
+}
+
+test_non_clone_dir_named_directly_never_syncs_the_enclosing_repo() {
+  local home before out after
+  home=$(build_enclosing_home nonclonedirect)
+  mkdir -p "$home/projects/not-a-clone"
+  before=$(head_sha "$home")
+
+  out=$(run_sync "$home" not-a-clone)
+  after=$(head_sha "$home")
+
+  assert_contains "$out" "not-a-clone: skipped: not a clone root" \
+    "the single-project form must apply the same clone-root guard"
+  [ "$before" = "$after" ] || \
+    fail "the single-project form fast-forwarded the enclosing repo ($before -> $after)"
+  pass "the single-project form also refuses a directory that is not its own clone root"
+}
+
+test_symlinked_clone_still_syncs() {
+  local home clone out
+  home=$(new_home)
+  clone=$(build_pair "$home" sigma)
+  advance_origin "$home" sigma C1
+  # A symlinked clone dir is a real clone root; the guard compares resolved paths,
+  # so it must not be mistaken for a directory nested in someone else's repo.
+  mv "$clone" "$home/real-sigma"
+  ln -s "$home/real-sigma" "$clone"
+
+  out=$(run_sync "$home")
+
+  assert_contains "$out" "sigma: synced" "a symlinked clone must still fast-forward"
+  pass "the clone-root guard accepts a symlinked clone directory"
+}
+
 test_non_signature_fetch_failure_is_not_retried() {
   local home fakebin clone out err
   home=$(new_home)
@@ -613,6 +725,7 @@ test_on_default_clean_behind_fast_forwards
 test_already_current_unchanged
 test_no_origin_skipped
 test_local_only_skipped
+test_unresolvable_registry_posture_skipped
 test_single_project_by_bare_name_resolves
 test_single_project_by_bare_name_ignores_cwd_shadow
 test_single_project_by_projects_relative_name_resolves
@@ -625,3 +738,6 @@ test_live_packed_refs_lock_is_never_removed
 test_live_git_cwd_in_clone_dir_blocks_removal
 test_transient_packed_refs_lock_self_clears
 test_non_signature_fetch_failure_is_not_retried
+test_non_clone_dir_never_syncs_the_enclosing_repo
+test_non_clone_dir_named_directly_never_syncs_the_enclosing_repo
+test_symlinked_clone_still_syncs
