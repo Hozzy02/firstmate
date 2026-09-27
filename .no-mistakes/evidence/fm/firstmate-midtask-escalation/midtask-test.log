@@ -1,0 +1,16 @@
+ok - fm-midtask-escalation: help and bare usage behave as documented
+ok - fm-midtask-escalation: an unrecorded task id is silently skipped
+ok - fm-midtask-escalation: a secondmate task id is skipped
+ok - fm-midtask-escalation: repeated blocked reports suggest up, once per new count
+ok - fm-midtask-escalation: a later blocked episode with the same count earns its own suggestion
+ok - fm-midtask-escalation: resolved: clears the blocked streak
+ok - fm-midtask-escalation: a declared paused: wait is exempt from the stall signal
+ok - fm-midtask-escalation: a long-idle failed state suggests up
+ok - fm-midtask-escalation: parked and unknown states are exempt from the stall signal
+ok - fm-midtask-escalation: drift in evidence that did not fire never forces a repeat suggestion
+ok - fm-midtask-escalation: reaching the no-mistakes fix-round threshold suggests up
+ok - fm-midtask-escalation: a clean healthy task is never suggested a model-class move
+ok - fm-midtask-escalation: arm registers a collision-free per-task check; disarm removes everything it wrote
+ok - fm-midtask-escalation: arm refuses to watch a task that was never recorded
+ok - fm-midtask-escalation: arm refuses to watch a secondmate
+ok - fm-midtask-escalation: malformed threshold overrides are refused, not guessed around

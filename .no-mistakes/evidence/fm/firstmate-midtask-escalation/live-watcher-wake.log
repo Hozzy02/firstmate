@@ -1,0 +1,2 @@
+check: /var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T//fm-lab.J2C9Tz/state/midtask-mt1.check.sh: midtask-escalation: mt1 suggests moving up a model class (current claude:default:default) - reported blocked 2 time(s) since its last resolved/done event - relaunch: bin/fm-control.sh mt1 relaunch --note "mid-task escalation: reported blocked 2 time(s) since its last resolved/done event"
+WATCH_EXIT=0

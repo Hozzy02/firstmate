@@ -1,0 +1,15 @@
+## state before forced teardown: .midtask-escalation-mt1 midtask-mt1.check-trust midtask-mt1.check.sh (plus mt1.meta etc.)
+## (non-forced teardown was refused by the captain-call gate because the injected blocked: lines read as open captain decisions)
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T//fm-lab.J2C9Tz
+WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+teardown: reaping leaked worktree process(es) for mt1: 28468 33423 34380 35157
+teardown: force-killing leaked worktree process(es) for mt1: 28468
+A new version of treehouse is available: 2.1.1 → v3.1.0
+Run "treehouse update" to update
+
+🌳 Worktree returned to pool.
+teardown mt1 complete (window primary:fm-mt1, worktree /Users/randalwade/.treehouse/demo-31e5a2/1/demo)
+Backlog: mt1 just finished (this home keeps no markdown backlog at /private/var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T/fm-lab.J2C9Tz/data/backlog.md). Update /private/var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T/fm-lab.J2C9Tz/data/backlog.md - move mt1 to Done, keep Done to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due.
+TD_EXIT=0
+## after teardown, state/ entries matching midtask|mt1:
+(none remain)

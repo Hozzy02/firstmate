@@ -1,0 +1,17 @@
+## status log:
+done [at=1790552694]: demo root has only .git (worktree link) and untracked .claude/settings.local.json (Firstmate hooks); 0 tracked files. Report written.
+blocked [at=1790552665]: cannot reach fixture registry
+blocked [at=1790552725]: same obstacle, retry failed
+## check #2, same evidence (expect no output):
+[exit=0] record=blocked=2@line3
+## worker writes resolved: then blocks twice again (new episode, same count 2)
+## check #3 (expect a new suggestion):
+midtask-escalation: mt1 suggests moving up a model class (current claude:default:default) - reported blocked 2 time(s) since its last resolved/done event - relaunch: bin/fm-control.sh mt1 relaunch --note "mid-task escalation: reported blocked 2 time(s) since its last resolved/done event"
+[exit=0] record=blocked=2@line6
+## check #4, unchanged (expect no output):
+[exit=0] record=blocked=2@line6
+## third blocked report (count 3, expect suggestion):
+midtask-escalation: mt1 suggests moving up a model class (current claude:default:default) - reported blocked 3 time(s) since its last resolved/done event - relaunch: bin/fm-control.sh mt1 relaunch --note "mid-task escalation: reported blocked 3 time(s) since its last resolved/done event"
+[exit=0] record=blocked=3@line7
+## worker resolves; single blocked afterwards (below threshold, expect no output):
+[exit=0] record=blocked=3@line7
