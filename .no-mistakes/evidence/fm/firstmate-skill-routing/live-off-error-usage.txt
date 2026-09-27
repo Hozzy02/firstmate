@@ -1,0 +1,15 @@
+--- off: no key in env or FM_HOME/.env
+exit=0
+stdout bytes=       0
+stderr: skill-route: off (TYPESAFE_API_KEY absent from the environment and /var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T/tmp.NgMqgPp19r/.env)
+
+--- error: invalid key
+skill-route: error (http 401 after 0 ms: {"detail":{"error_type":"authentication_error","message":"Cannot authenticate with the server. Please check your API key and try again."}})
+skill-route:
+  status: error
+  reason: http 401 after 0 ms: {"detail":{"error_type":"authentication_error","message":"Cannot authenticate with the server. Please check your API key and try again."}}
+exit=0
+
+--- usage: unreadable brief
+error: brief file not readable: /nonexistent.md
+exit=2

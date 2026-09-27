@@ -1,0 +1,45 @@
+$ env -u TYPESAFE_API_KEY FM_HOME=<real firstmate home> bin/fm-skill-route.sh brief.md --project firstmate --project-dir "$PWD"
+skill-route:
+  status: clear
+  model: jev-1.13.0   latency_ms: 0   tokens: 4261/736
+  skill: superpowers:systematic-debugging (Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes) noul=0.97 -> selected
+  skill: superpowers:verification-before-completion (Use when about to claim work is complete, fixed, or passing, before committing or creating PRs - requires running verification commands and confirming output before making any success claims; evidence before assertions always) noul=0.95 -> selected
+  skill: diagnostic-reasoning (Agent-only procedure for diagnosing reported bugs.) noul=0.93 -> selected
+  skill: superpowers:test-driven-development (Use when implementing any feature or bugfix, before writing implementation code) noul=0.93 -> selected
+  skill: no-mistakes (Validate your code changes through the no-mistakes pipeline - automated code review, tests, lint, docs, push, PR, and CI - before they reach the configured push target. Use when the user asks to run no-mistakes, gate or ship or validate their changes, push safely, asks you to do a task and then validate it, or invokes /no-mistakes.) noul=0.87 -> selected
+  skill: superpowers:requesting-code-review (Use when completing tasks, implementing major features, or before merging to verify work meets requirements) noul=0.83 -> not selected
+  skill: superpowers:writing-plans (Use when you have a spec or requirements for a multi-step task, before touching code) noul=0.82 -> not selected
+  skill: superpowers:executing-plans (Use when executing an implementation plan in the current session as the implementer yourself — your human partner chose inline execution, or no subagent tool is available) noul=0.79 -> not selected
+  skill: harness-adapters (Agent-only reference for firstmate harness operations.) noul=0.76 -> not selected
+  skill: superpowers:using-git-worktrees (Use when starting feature work that needs isolation from current workspace or before executing implementation plans - ensures an isolated workspace exists via native tools or git worktree fallback) noul=0.54 -> not selected
+  skill: superpowers:subagent-driven-development (Use when executing implementation plans with independent tasks in the current session) noul=0.45 -> not selected
+  skill: firstmate-codexapp (Agent-only playbook for coordinating visible Codex Desktop threads alongside Firstmate without pretending they are a selectable shell backend.) noul=0.44 -> not selected
+  skill: firstmate-coding-guidelines (Agent-only reference for changing firstmate's shared, tracked material per AGENTS.md section 1.) noul=0.41 -> not selected
+  skill: superpowers:receiving-code-review (Use when receiving code review feedback, before implementing suggestions, especially if feedback seems unclear or technically questionable - requires technical rigor and verification, not performative agreement or blind implementation) noul=0.38 -> not selected
+  skill: stow (Sweep the current session for uncaptured durable knowledge, file it to disk, persist the open work records this session knows are unfiled or now wrong, and curate the home's tiered, decaying startup memory before a context reset. Use when the captain invokes /stow (e.g. "/stow", "stow what you've learned"), before a session reset or context compaction, or periodically to keep operational memory current.) noul=0.37 -> not selected
+  skill: ahoy (Recap visible session events and guide the captain through visibly unanswered decisions when the captain explicitly invokes /ahoy, with a Bearings fallback when /ahoy is the session's first real captain message.) noul=0.36 -> not selected
+  skill: superpowers:finishing-a-development-branch (Use when implementation is complete, all tests pass, and you need to decide how to integrate the work) noul=0.35 -> not selected
+  skill: captain-hold-lifecycle (Agent-only policy for completing investigations and visual reviews without losing unresolved captain calls, and for closing what the captain owns with his actual words.) noul=0.34 -> not selected
+  skill: superpowers:using-superpowers (Use when starting any conversation - establishes how to find and use skills, requiring skill invocation before ANY response including clarifying questions) noul=0.34 -> not selected
+  skill: project-management (Agent-only procedure for Firstmate project management.) noul=0.3 -> not selected
+  skill: process-event-sources (Agent-only procedure for registered process-to-event sources and their wakes.) noul=0.28 -> not selected
+  skill: quiet (Enter quiet supervision mode when the captain invokes /quiet or asks for quiet mode, quiet-while-present, or fewer routine wake turns while they stay in the session.) noul=0.26 -> not selected
+  skill: decision-hold-lifecycle (Renamed pointer kept for in-flight briefs: the decisions concept collapsed into "a task held for the captain".) noul=0.25 -> not selected
+  skill: superpowers:brainstorming ("You MUST use this before any creative work - creating features, building components, adding functionality, or modifying behavior. Explores user intent, requirements and design before implementation.") noul=0.25 -> not selected
+  skill: superpowers:writing-skills (Use when creating new skills, editing existing skills, or verifying skills work before deployment) noul=0.22 -> not selected
+  skill: bootstrap-diagnostics (Agent-only handling playbook for session-start bootstrap diagnostics.) noul=0.17 -> not selected
+  skill: superpowers:diagnosing-superpowers (Use when a superpowers session went wrong and your human partner wants to know why — repeated work, ignored plans, stumbles, poor results, a skill that didn't fire, "it took too long", "why is it so expensive", "what is it doing" — or wants to build a bug report for the superpowers maintainers, for the current session or a past one identified by id or path, on any harness.) noul=0.16 -> not selected
+  skill: lg (Captain's quick decision round. Use when the captain types /lg (or asks to be prompted for pending decisions). Gathers every open decision that needs the captain and asks them as multiple-choice questions, each with a recommended option first.) noul=0.14 -> not selected
+  skill: ask-user-authority (Agent-only decision procedure for ask-user findings.) noul=0.12 -> not selected
+  skill: superpowers:dispatching-parallel-agents (Use when facing 2+ independent tasks that can be worked on without shared state or sequential dependencies) noul=0.12 -> not selected
+  skill: typesafe:typesafe-ai (Build AI-powered software with TypeSafe: small units of AI intelligence you) noul=0.11 -> not selected
+  skill: firstmate-orca (Agent-only operator checklist for Firstmate's Orca runtime backend. Use when switching to Orca, spawning or supervising Orca-backed work, smoke-testing Orca backend behavior, debugging Orca task state, or reconciling Orca-backed task metadata.) noul=0.1 -> not selected
+  skill: updatefirstmate (Self-update a running firstmate and its secondmates to the latest from origin.) noul=0.09 -> not selected
+  skill: bearings (Generate a "pick up where I left off" fleet digest from firstmate's live fleet state.) noul=0.08 -> not selected
+  skill: secondmate-provisioning (Agent-only reference for persistent secondmate setup and retirement.) noul=0.07 -> not selected
+  skill: fmx-respond (Agent-only playbook for handling Relay mentions and follow-ups.) noul=0.06 -> not selected
+  skill: afk (Enter the away posture when the captain invokes /afk, says they are going afk, `state/.afk-contract` or `state/.afk` exists, an incoming message starts with `FM_INJECT_MARK`, or any `state/.subsuper-*` marker is involved.) noul=0.04 -> not selected
+  skill: stuck-crewmate-recovery (Agent-only playbook for stuck or missing ordinary Firstmate direct reports.) noul=0.03 -> not selected
+  skill: quota-array-dispatch (Agent-only decision procedure for resolving a matched crew-dispatch profile) noul=0.02 -> not selected
+  line: Load these skills: superpowers:systematic-debugging, superpowers:verification-before-completion, diagnostic-reasoning, superpowers:test-driven-development, no-mistakes
+exit=0

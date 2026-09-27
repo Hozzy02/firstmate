@@ -1,0 +1,6 @@
+skill-route:
+  status: none
+  model: jev-1.13.0   latency_ms: 1000   tokens: 371/22
+  skill: release-notes (Format release notes for marketing.) noul=0.05 -> not selected
+  reason: no skill cleared confidence floor 0.6
+exit=0

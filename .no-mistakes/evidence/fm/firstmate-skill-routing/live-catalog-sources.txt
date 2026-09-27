@@ -1,0 +1,9 @@
+fixture HOME: dbkit@m enabled (sql-migrations), dbextra@m installed but DISABLED (db-helper); project .claude/skills/repo-db-conventions; user skill release-notes
+skill-route:
+  status: clear
+  model: jev-1.13.0   latency_ms: 0   tokens: 556/58
+  skill: dbkit:sql-migrations (Write and review safe Postgres schema migrations.) noul=0.97 -> selected
+  skill: repo-db-conventions (This repo's conventions for database migrations and naming.) noul=0.96 -> selected
+  skill: release-notes (Format release notes for marketing.) noul=0.04 -> not selected
+  line: Load these skills: dbkit:sql-migrations, repo-db-conventions
+exit=0
