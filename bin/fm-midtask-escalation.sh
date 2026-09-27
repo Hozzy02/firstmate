@@ -55,23 +55,25 @@
 #     - the status log carries FM_MIDTASK_BLOCKED_THRESHOLD (default 2) or
 #       more `blocked:` reports since its last resolved/done/failed event
 #     - the last status event is FM_MIDTASK_STALL_SECONDS (default 1800)
-#       seconds old or older while bin/fm-crew-state.sh reports anything
-#       other than working, paused, or done
-#   down (simpler) when NONE of the above hold, bin/fm-crew-state.sh reports
-#     done, the selected run's outcome starts with `passed` (passed,
-#     passed-with-override, or passed-with-skips), it never used more than
-#     its first fix round on any step, and the status log carries no
-#     `blocked:` report
+#       seconds old or older while bin/fm-crew-state.sh reports blocked or
+#       failed (parked waits on the captain and unknown means the tooling
+#       cannot see the worker, so neither is read as a struggle)
+#   down (simpler) when NONE of the above hold, bin/fm-crew-state.sh still
+#     reports working, the selected run has not needed more than its first
+#     fix round on any step, and the status log carries no `blocked:`
+#     report; never once the task is done, since there is nothing left to
+#     relaunch
 #   none otherwise; `check` prints nothing.
 # Struggling is decided first: a task that looks both quiet and about to run
 # out of fix rounds is worth the worse read, not the better one.
 #
 # Rate limiting: state/.midtask-escalation-<task-id> records the evidence
-# signature behind the last suggestion this printed. A `check` run whose
-# signature has not changed since prints nothing, so a task stuck in the
-# same state is reported once, not on every poll; a new blocked report, a
-# higher fix-round count, or another stall interval elapsing is new evidence
-# and earns a fresh suggestion.
+# signature behind the last suggestion this printed, built only from the
+# triggers that actually fired. A `check` run whose signature has not changed
+# since prints nothing, so a task stuck in the same state is reported once,
+# not on every poll; a new blocked report, a higher fix-round count, or
+# another stall interval elapsing on a firing stall is new evidence and earns
+# a fresh suggestion, while drift in evidence that did not fire does not.
 #
 # Optional target profile: when TYPESAFE_API_KEY is set - in the
 # environment, or in FM_HOME/.env, the same opt-in bin/fm-dispatch-resolve.sh
@@ -129,12 +131,10 @@ check_id_for() { printf 'midtask-%s\n' "$1"; }  # <task-id> -> registered check 
 
 # --- evidence gathering -----------------------------------------------------
 
-# Sets ROUNDS_USED (highest ROUND any step needed, or empty when unknown) and
-# NM_OUTCOME (the selected run's outcome word, or empty when unknown). Never
-# fails the caller: any unreadable step just leaves the fields empty.
+# Sets ROUNDS_USED (highest ROUND any step needed, or empty when unknown).
+# Never fails the caller: any unreadable step just leaves it empty.
 nm_evidence() {  # <worktree> <branch>
   ROUNDS_USED=''
-  NM_OUTCOME=''
   local worktree=$1 branch=$2 overview choice selected_id detail stats round
   [ -n "$worktree" ] && [ -d "$worktree" ] || return 0
   [ -n "$branch" ] || return 0
@@ -147,7 +147,6 @@ nm_evidence() {  # <worktree> <branch>
   [ -n "$selected_id" ] || return 0
   detail=$(fm_nm_run_checked "$worktree" "$NM_TIMEOUT" axi status --run "$selected_id") || return 0
   [ "$(fm_nm_field "$detail" branch)" = "$branch" ] || return 0
-  NM_OUTCOME=$(fm_nm_field "$detail" outcome)
   stats=$(fm_nm_run_checked "$worktree" "$NM_TIMEOUT" stats --agents --run "$selected_id") || return 0
   round=$(printf '%s\n' "$stats" \
     | awk '$1 ~ /^(intent|rebase|review|test|document|lint|push|pr|ci)$/ && $2 ~ /^[0-9]+$/ {print $2}' \
@@ -194,23 +193,29 @@ crew_state_word() {  # <task-id> -> state word, or "unknown"
 
 # --- decision ----------------------------------------------------------------
 
-# Sets DIRECTION (up|down|none) and REASON from the gathered evidence.
+# Sets DIRECTION (up|down|none), REASON, and TRIGGERS (the evidence values of
+# only the rules that fired, for the rate-limit signature).
 decide() {  # <crew-state>
   local crew_state=$1
   DIRECTION=none
   REASON=''
-  local reasons=() joined
+  TRIGGERS=''
+  local reasons=() triggers=() joined
 
   if [ -n "$ROUNDS_USED" ] && [ "$ROUNDS_USED" -ge "$ROUND_THRESHOLD" ]; then
     reasons+=("no-mistakes used $ROUNDS_USED fix round(s) on a step (cap ~$ROUND_THRESHOLD)")
+    triggers+=("rounds=$ROUNDS_USED")
   fi
   if [ "$BLOCKED_COUNT" -ge "$BLOCKED_THRESHOLD" ]; then
     reasons+=("reported blocked $BLOCKED_COUNT time(s) since its last resolved/done event")
+    triggers+=("blocked=$BLOCKED_COUNT")
   fi
   if [ -n "$STALL_SECONDS" ] && [ "$STALL_SECONDS" -ge "$STALL_THRESHOLD" ]; then
     case "$crew_state" in
-      working|paused|done) ;;
-      *) reasons+=("no status update for ${STALL_SECONDS}s while state=$crew_state") ;;
+      blocked|failed)
+        reasons+=("no status update for ${STALL_SECONDS}s while state=$crew_state")
+        triggers+=("stall_bucket=$((STALL_SECONDS / STALL_THRESHOLD))")
+        ;;
     esac
   fi
 
@@ -218,15 +223,16 @@ decide() {  # <crew-state>
     DIRECTION=up
     joined=$(printf '%s; ' "${reasons[@]}")
     REASON=${joined%; }
+    TRIGGERS=${triggers[*]}
     return 0
   fi
 
-  if [ "$crew_state" = "done" ] && [ -n "$NM_OUTCOME" ] \
-    && [ "${NM_OUTCOME#passed}" != "$NM_OUTCOME" ] \
+  if [ "$crew_state" = working ] \
     && [ -n "$ROUNDS_USED" ] && [ "$ROUNDS_USED" -le 1 ] \
     && [ "$BLOCKED_COUNT" -eq 0 ]; then
     DIRECTION=down
-    REASON="finished done with outcome=$NM_OUTCOME, $ROUNDS_USED fix round(s), and 0 blocked reports"
+    REASON="still working with no step past fix round $ROUNDS_USED and 0 blocked reports"
+    TRIGGERS="clean_rounds=$ROUNDS_USED"
   fi
 }
 
@@ -284,9 +290,7 @@ action_check() {
   decide "$crew_state"
   [ "$DIRECTION" != none ] || return 0
 
-  local stall_bucket=-
-  [ -z "$STALL_SECONDS" ] || stall_bucket=$((STALL_SECONDS / STALL_THRESHOLD))
-  local signature="direction=$DIRECTION rounds=${ROUNDS_USED:--} blocked=$BLOCKED_COUNT stall_bucket=$stall_bucket crew_state=$crew_state outcome=${NM_OUTCOME:--}"
+  local signature="direction=$DIRECTION $TRIGGERS"
 
   local record="$STATE/.midtask-escalation-$id" prev=''
   [ -f "$record" ] && prev=$(cat "$record" 2>/dev/null)
@@ -326,6 +330,7 @@ action_arm() {
   local id=$1 check_id shim trust home want device
   fm_pr_task_id_valid "$id" || die "invalid task id: $id"
   [ -f "$STATE/$id.meta" ] || die "no recorded task: $id"
+  [ "$(fm_meta_get "$STATE/$id.meta" kind)" != secondmate ] || die "a secondmate is never watched: $id"
   check_id=$(check_id_for "$id")
   shim="$STATE/$check_id.check.sh"
   trust="$STATE/$check_id.check-trust"

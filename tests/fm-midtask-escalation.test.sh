@@ -191,17 +191,54 @@ test_declared_pause_does_not_count_as_stall() {
   pass "fm-midtask-escalation: a declared paused: wait is exempt from the stall signal"
 }
 
-test_old_non_working_state_suggests_up() {
+test_old_failed_state_suggests_up() {
   local home crew out
   home=$(make_home stalled)
   write_meta "$home" demo "branch=fm/no-run"
-  write_status "$home" demo "needs-decision [at=$(($(now) - 7200))]: pick an approach"
-  crew=$(stub_crew_state "$TMP_ROOT/bin4" "state: parked · source: run-step · needs-decision")
+  write_status "$home" demo "failed [at=$(($(now) - 7200))]: tests keep breaking"
+  crew=$(stub_crew_state "$TMP_ROOT/bin4" "state: failed · source: status-log · failed")
 
   out=$(FM_HOME="$home" FM_MIDTASK_CREW_STATE_BIN="$crew" PATH="$(no_nm_path)" "$TOOL" check demo)
-  assert_contains "$out" "suggests moving up a model class" "a long-idle non-working state suggests up"
+  assert_contains "$out" "suggests moving up a model class" "a long-idle failed state suggests up"
   assert_contains "$out" "no status update for" "the evidence names the stall duration"
-  pass "fm-midtask-escalation: a long-idle non-working/paused/done state suggests up"
+  pass "fm-midtask-escalation: a long-idle failed state suggests up"
+}
+
+test_parked_and_unknown_do_not_count_as_stall() {
+  local home crew out state
+  for state in parked unknown; do
+    home=$(make_home "stall-exempt-$state")
+    write_meta "$home" demo "branch=fm/no-run"
+    write_status "$home" demo "needs-decision [at=$(($(now) - 86400))]: pick an approach"
+    crew=$(stub_crew_state "$TMP_ROOT/bin4-$state" "state: $state · source: none · waiting")
+    out=$(FM_HOME="$home" FM_MIDTASK_CREW_STATE_BIN="$crew" PATH="$(no_nm_path)" "$TOOL" check demo)
+    assert_equals '' "$out" "a very old $state state is never read as a worker struggle"
+  done
+  pass "fm-midtask-escalation: parked and unknown states are exempt from the stall signal"
+}
+
+test_unfired_evidence_drift_does_not_re_suggest() {
+  local home crew_blocked crew_working out
+  home=$(make_home drift)
+  write_meta "$home" demo "branch=fm/no-run"
+  write_status "$home" demo \
+    "blocked [at=$(($(now) - 7200))]: obstacle A" \
+    "blocked [at=$(($(now) - 3700))]: obstacle A again"
+  crew_blocked=$(stub_crew_state "$TMP_ROOT/bin8a" "state: blocked · source: pane · idle")
+  crew_working=$(stub_crew_state "$TMP_ROOT/bin8b" "state: working · source: pane · running")
+
+  out=$(FM_HOME="$home" FM_MIDTASK_CREW_STATE_BIN="$crew_working" PATH="$(no_nm_path)" "$TOOL" check demo)
+  assert_contains "$out" "reported blocked 2 time(s)" "two blocked reports suggest up while working"
+  assert_not_contains "$out" "no status update for" "the stall rule does not fire while working"
+
+  out=$(FM_HOME="$home" FM_MIDTASK_CREW_STATE_BIN="$crew_working" FM_MIDTASK_STALL_SECONDS=60 \
+    PATH="$(no_nm_path)" "$TOOL" check demo)
+  assert_equals '' "$out" "a stall interval elapsing without the stall rule firing is not new evidence"
+
+  out=$(FM_HOME="$home" FM_MIDTASK_CREW_STATE_BIN="$crew_blocked" FM_MIDTASK_STALL_SECONDS=999999 \
+    PATH="$(no_nm_path)" "$TOOL" check demo)
+  assert_equals '' "$out" "a crew-state change alone, with the same firing evidence, is not re-suggested"
+  pass "fm-midtask-escalation: drift in evidence that did not fire never forces a repeat suggestion"
 }
 
 test_nm_round_threshold_suggests_up() {
@@ -222,22 +259,26 @@ test_nm_round_threshold_suggests_up() {
   pass "fm-midtask-escalation: reaching the no-mistakes fix-round threshold suggests up"
 }
 
-test_clean_pass_suggests_down() {
-  local home wt crew out bindir
+test_clean_first_round_while_working_suggests_down() {
+  local home wt crew done_crew out bindir
   home=$(make_home clean)
   write_meta "$home" demo >/dev/null
   wt=$(sed -n 's/^worktree=//p' "$home/state/demo.meta" | head -1)
-  write_status "$home" demo "done [at=$(now)]: shipped clean"
-  crew=$(stub_crew_state "$TMP_ROOT/bin6" "state: done · source: run-step · passed")
+  write_status "$home" demo "working [at=$(now)]: review running"
+  crew=$(stub_crew_state "$TMP_ROOT/bin6" "state: working · source: run-step · reviewing")
+  done_crew=$(stub_crew_state "$TMP_ROOT/bin6-done" "state: done · source: run-step · passed")
   bindir="$TMP_ROOT/bin6-nm"
-  printf 'STEP    ROUND  PURPOSE  AGENT  MODEL  SESSION  KEY  DURATION  MODEL  SUBPROC  RT  TOOLS  FIND  WORK  FALLBACK  EXIT\nreview  1      review   claude opus   cold     x    1s        -      -        -   -      0     -/-   -         ok\ntest    1      test     claude opus   cold     y    1s        -      -        -   -      0     -/-   -         ok\n' \
+  printf 'STEP    ROUND  PURPOSE  AGENT  MODEL  SESSION  KEY  DURATION  MODEL  SUBPROC  RT  TOOLS  FIND  WORK  FALLBACK  EXIT\nreview  1      review   claude opus   cold     x    1s        -      -        -   -      0     -/-   -         ok\n' \
     > "$TMP_ROOT/rounds-clean.txt"
-  stub_no_mistakes "$bindir" "$wt" 01RUNCLEAN0000000000000 completed completed passed "$TMP_ROOT/rounds-clean.txt"
+  stub_no_mistakes "$bindir" "$wt" 01RUNCLEAN0000000000000 running reviewing "" "$TMP_ROOT/rounds-clean.txt"
+
+  out=$(FM_HOME="$home" FM_MIDTASK_CREW_STATE_BIN="$done_crew" PATH="$bindir:/usr/bin:/bin" "$TOOL" check demo)
+  assert_equals '' "$out" "a finished task is never suggested a relaunch down"
 
   out=$(FM_HOME="$home" FM_MIDTASK_CREW_STATE_BIN="$crew" PATH="$bindir:/usr/bin:/bin" "$TOOL" check demo)
-  assert_contains "$out" "suggests moving down a model class" "a clean first-pass done task suggests down"
-  assert_contains "$out" "outcome=passed, 1 fix round(s), and 0 blocked reports" "the evidence names the clean-pass facts"
-  pass "fm-midtask-escalation: a clean first-pass done task suggests down"
+  assert_contains "$out" "suggests moving down a model class" "a still-working task on a clean first round suggests down"
+  assert_contains "$out" "still working with no step past fix round 1 and 0 blocked reports" "the evidence names the clean mid-task facts"
+  pass "fm-midtask-escalation: a still-working task on a clean first round suggests down"
 }
 
 test_arm_uses_a_distinct_check_id_and_disarm_removes_everything() {
@@ -282,6 +323,18 @@ test_arm_refuses_without_a_recorded_task() {
   pass "fm-midtask-escalation: arm refuses to watch a task that was never recorded"
 }
 
+test_arm_refuses_a_secondmate() {
+  local home err rc
+  home=$(make_home armmate)
+  fm_write_meta "$home/state/mate.meta" "kind=secondmate" "worktree=$(make_worktree)" "branch=fm/demo"
+  err=$(FM_HOME="$home" "$TOOL" arm mate 2>&1 >/dev/null)
+  rc=$?
+  assert_not_equals 0 "$rc" "arm refuses a secondmate"
+  assert_contains "$err" "secondmate" "the refusal names the reason"
+  assert_absent "$home/state/midtask-mate.check.sh" "no shim is left behind for a secondmate"
+  pass "fm-midtask-escalation: arm refuses to watch a secondmate"
+}
+
 test_bad_threshold_env_is_a_usage_error() {
   local home err rc
   home=$(make_home badenv)
@@ -299,9 +352,12 @@ test_secondmate_is_skipped
 test_repeated_blocked_reports_suggest_up_and_rate_limit
 test_resolved_clears_the_blocked_streak
 test_declared_pause_does_not_count_as_stall
-test_old_non_working_state_suggests_up
+test_old_failed_state_suggests_up
+test_parked_and_unknown_do_not_count_as_stall
+test_unfired_evidence_drift_does_not_re_suggest
 test_nm_round_threshold_suggests_up
-test_clean_pass_suggests_down
+test_clean_first_round_while_working_suggests_down
 test_arm_uses_a_distinct_check_id_and_disarm_removes_everything
 test_arm_refuses_without_a_recorded_task
+test_arm_refuses_a_secondmate
 test_bad_threshold_env_is_a_usage_error
