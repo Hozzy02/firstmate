@@ -60,6 +60,13 @@ FM_STATE_OVERRIDE="$STATE_DIR" bash -c '
   status_retire_presentation_task "$2" task-one
 ' _ "$ROOT" "$STATE_DIR" || fail 'task retirement failed'
 [ ! -e "$STATE_DIR/.task-one.events-cursor" ] || fail 'task retirement left the events cursor for a reused id'
+printf 'stale\t99\n' > "$STATE_DIR/.task-one.events-cursor"
+FM_STATE_OVERRIDE="$STATE_DIR" bash -c '
+  . "$1/bin/fm-wake-lib.sh"
+  . "$1/bin/fm-classify-lib.sh"
+  status_retire_presentation_task "$2" task-one
+' _ "$ROOT" "$STATE_DIR" || fail 'repeated task retirement failed'
+[ ! -e "$STATE_DIR/.task-one.events-cursor" ] || fail 'repeated retirement kept a cursor that outlived its status file'
 printf 'working [at=1790000400]: second reuse\n' > "$STATUS"
 capture || fail 'post-retirement capture failed'
 assert_equals 8 "$(wc -l < "$LEDGER" | tr -d ' ')" 'retired task id starts capture from the first line'

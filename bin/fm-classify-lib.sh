@@ -1666,6 +1666,8 @@ status_retire_presentation_task() {  # <state> <task-id>
   if [ ! -e "$state/$task.status" ] && [ ! -L "$state/$task.status" ] \
     && [ ! -e "$state/.$task.open-decisions-cursor" ] \
     && [ ! -L "$state/.$task.open-decisions-cursor" ] \
+    && [ ! -e "$state/.$task.events-cursor" ] \
+    && [ ! -L "$state/.$task.events-cursor" ] \
     && [ ! -e "$home_appends" ] && [ ! -L "$home_appends" ] \
     && [ ! -e "$home_appends_lock" ] && [ ! -L "$home_appends_lock" ] \
     && [ ! -e "$signal_marker" ] && [ ! -L "$signal_marker" ] \
@@ -1716,8 +1718,14 @@ EOF
     fi
   fi
   if [ "$rc" -eq 0 ]; then
-    rm -f -- "$state/$task.status" "$state/.$task.open-decisions-cursor" \
-      "$state/.$task.events-cursor" "$home_appends" "$signal_marker" "$heartbeat_marker" "$daemon_marker" || rc=1
+    if fm_lock_acquire_wait "$state/.events.lock"; then
+      rm -f -- "$state/$task.status" "$state/.$task.events-cursor" || rc=1
+      fm_lock_release "$state/.events.lock" || rc=1
+    else
+      rc=1
+    fi
+    rm -f -- "$state/.$task.open-decisions-cursor" \
+      "$home_appends" "$signal_marker" "$heartbeat_marker" "$daemon_marker" || rc=1
     fm_lock_remove_path "$home_appends_lock" 2>/dev/null || true
   fi
   fm_lock_release "$lock" || rc=1
