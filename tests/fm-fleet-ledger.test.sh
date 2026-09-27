@@ -113,6 +113,8 @@ EOF
   assert_not_contains "$LEDGER_AFTER_POLL" "partial line" "the poll recorded a line before its newline arrived"
   assert_contains "$LEDGER_AFTER_POLL" '"state":"needs-decision"' "the watcher poll did not record the status lines"
   assert_absent "$HOME_DIR/state/.$TASK.fleet-ledger-offset" "cleanup left the task's ledger offset behind"
+  assert_equals 5 "$(jq -s '[.[] | select(.event == "task.status")] | length' "$HOME_DIR/state/events.ndjson")" \
+    "transition ledger captured the final status lines before teardown"
   pass "flag on: dispatch, polled status lines, the local merge after its task's pending lines, and cleanup are recorded in order"
 }
 
@@ -135,6 +137,12 @@ test_flag_on_records_a_pr_merge_once() {
 ["task.merged",null,"pr","$pr_url"]
 EOF
 )" "$rows" "PR merge rows"
+  assert_equals "$(cat <<EOF
+["task.status",null]
+["task.merged","$pr_url"]
+EOF
+)" "$(jq -c '[.event, .pr]' "$HOME_DIR/state/events.ndjson")" \
+    "transition ledger records the merge once"
   pass "flag on: a PR merge is recorded once, after the task's pending status lines"
 }
 
@@ -157,6 +165,12 @@ test_flag_on_records_a_pr_registration() {
 ["task.pr_ready",null,"$pr_url"]
 EOF
 )" "$rows" "PR registration rows"
+  assert_equals "$(cat <<EOF
+["task.status",null]
+["task.pr_ready","$pr_url"]
+EOF
+)" "$(jq -c '[.event, .pr]' "$HOME_DIR/state/events.ndjson")" \
+    "transition ledger records review-ready once"
   pass "flag on: registering a PR records task.pr_ready with its full URL after the task's pending status lines, and the merge-time re-record adds nothing"
 }
 
@@ -195,6 +209,9 @@ test_worker_status_line_is_recorded_when_written() {
     "$(cat "$HOME_DIR/state/$TASK.status")" "status log"
   assert_equals '["task.status","needs-decision"," pick a lamp colour"]' \
     "$(ledger_rows '[.event, .state, .text]')" "ledger rows right after the append"
+  assert_equals "[\"$TASK\",\"needs-decision\",1790000000]" \
+    "$(jq -c '[.task, .state, .ts]' "$HOME_DIR/state/events.ndjson")" \
+    "transition row right after the worker append"
   out=$(in_home "$ROOT/bin/fm-fleet-ledger.sh" capture 2>&1) || fail "backstop capture failed: $out"
   assert_equals 1 "$(wc -l < "$HOME_DIR/state/fleet-ledger.jsonl" | tr -d ' ')" \
     "ledger records after the backstop capture"
@@ -261,6 +278,9 @@ test_worker_status_line_with_the_flag_absent() {
     || fail "the worker status command failed: $out"
   assert_equals "" "$out" "worker status command output"
   assert_equals "done [at=1790000000]: ready" "$(cat "$HOME_DIR/state/$TASK.status")" "status log"
+  assert_equals '["done",1790000000,"status"]' \
+    "$(jq -c '[.state, .ts, .time_source]' "$HOME_DIR/state/events.ndjson")" \
+    "transition record with the optional fleet ledger disabled"
   leftovers=$(cd "$HOME_DIR/state" && find . -name '*fleet-ledger*')
   assert_equals "" "$leftovers" "ledger files with the flag absent"
   pass "flag off: the worker's status command is a plain append and leaves no ledger file, offset, or lock"

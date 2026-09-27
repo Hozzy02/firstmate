@@ -385,6 +385,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/events.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/fleet-ledger.md",
       "audience": "operator-current"
     },

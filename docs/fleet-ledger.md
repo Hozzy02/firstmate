@@ -1,7 +1,8 @@
 # Fleet activity ledger
 
 The fleet activity ledger is an opt-in, append-only file that outside tools can read to follow what a firstmate home is doing: which tasks were dispatched, what their workers reported, when a PR became ready for review, when their work merged, and when they were cleaned up.
-It is the stable, documented hook for firstmate status; this page is its contract.
+It is the documented hook for the broader fleet activity stream; this page is its contract.
+For task status transition timing and deduplicated event identities, read [`state/events.ndjson`](events.md).
 
 ## Turning it on and off
 
