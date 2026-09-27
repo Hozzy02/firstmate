@@ -1105,6 +1105,8 @@ fm_lock_try_acquire() {
 fm_lock_acquire_wait() {
   local lockdir=$1
   while ! fm_lock_try_acquire "$lockdir"; do
+    # A lock whose directory was torn down can never be acquired.
+    [ -d "$(dirname -- "$lockdir")" ] || return 1
     sleep 0.1
   done
 }
