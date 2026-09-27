@@ -1,0 +1,12 @@
+## Scenario 5: teardown captures the final status line before retiring the log, and removes the task's events cursor
+cursor before teardown: .evt-pr.events-cursor
+ledger records for evt-pr before teardown: 7
+fm-teardown rc=0
+WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+/var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T/fm-lab.wRfRYg/projects/sample: already current
+teardown evt-pr complete (window firstmate:fm-evt-pr, worktree /var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T//fm-lab.wRfRYg/wt-evt-pr)
+Backlog: evt-pr just finished (this home keeps no markdown backlog at /private/var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T/fm-lab.wRfRYg/data/backlog.md). Update /private/var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T/fm-lab.wRfRYg/data/backlog.md - move evt-pr to Done, keep Done to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due.
+ledger records for evt-pr after teardown: 8
+{"event":"task.merged","state":null,"ts":1790508747,"time_source":"recorded","line":null,"pr":"https://github.com/Hozzy02/fm-lab-nonexistent-repo/pull/8"}
+{"event":"task.status","state":"merged","ts":1790508756,"time_source":"status","line":"merged [at=1790508756]: final line appended directly, never projected","pr":null}
+status log present after teardown: no; events cursor present: no

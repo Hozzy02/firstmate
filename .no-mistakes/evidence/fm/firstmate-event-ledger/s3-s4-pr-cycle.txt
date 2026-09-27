@@ -1,0 +1,12 @@
+## Scenario 3: PR registration (real fm-pr-check; real gh read of an unreadable PR) records task.pr_ready once; merge-time re-record adds nothing
+fm-pr-check (first) rc=0: armed: state/evt-pr.check.sh 
+fm-pr-check (repeat) rc=0: armed: state/evt-pr.check.sh 
+fm-pr-check (merge-time) rc=0: armed: state/evt-pr.check.sh 
+{"event":"task.status","task":"evt-pr","ts":1790508736,"time_source":"status","state":"done","pr":null}
+{"event":"task.pr_ready","task":"evt-pr","ts":1790508737,"time_source":"recorded","state":null,"pr":"https://github.com/Hozzy02/fm-lab-nonexistent-repo/pull/8"}
+## Scenario 4: merge outcome (fm_merge_outcome_report, twice) records task.merged once; PR cycle time derivable
+report1 rc=0
+report2 rc=0
+{"event":"task.pr_ready","task":"evt-pr","ts":1790508737,"time_source":"recorded","pr":"https://github.com/Hozzy02/fm-lab-nonexistent-repo/pull/8"}
+{"event":"task.merged","task":"evt-pr","ts":1790508747,"time_source":"recorded","pr":"https://github.com/Hozzy02/fm-lab-nonexistent-repo/pull/8"}
+{"pr_cycle_s":10,"pr_ready_count":1,"merged_count":1}

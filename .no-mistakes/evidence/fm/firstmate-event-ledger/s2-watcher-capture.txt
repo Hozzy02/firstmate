@@ -1,0 +1,10 @@
+## Scenario 2: watcher recovers status lines written outside the worker command; partial line waits
+ledger lines before watcher:        4
+--- watcher checkpoint output:
+signal: /var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T//fm-lab.wRfRYg/state/evt-demo.status
+ledger lines after watcher:        6
+{"state":"blocked","ts":1790508641,"time_source":"status","line":"blocked [at=1790508641]: written by another path (no fm-events call)"}
+{"state":null,"ts":1790508641,"time_source":"capture","line":"legacy line with no at tag"}
+partial-line records before newline: 0
+after newline + two repeated captures:        7 lines; unique ids: 7
+{"state":"paused","ts":1790508641,"time_source":"status","line":"paused [at=1790508641]: partial, no newline yet - now complete"}

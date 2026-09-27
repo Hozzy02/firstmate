@@ -1,0 +1,21 @@
+## Scenario 6 (adversarial): reused task id after teardown starts capture from its first line
+capture rc=0
+{"task":"evt-pr","state":"working","ts":1790508774,"time_source":"status","line":"working [at=1790508774]: reused id first line"}
+
+## Scenario 7 (adversarial): ledger unwritable (events.ndjson is a directory) - worker status command still appends and exits 0
+worker status command rc=0
+status log: blocked [at=1790508775]: need a token
+after ledger restored, watcher-style capture rc=0 recovers: {"state":"blocked","ts":1790508775,"time_source":"status"}
+
+## Scenario 8 (adversarial): events.ndjson replaced by a symlink - writer refuses to follow it
+capture rc=1 (nonzero expected)
+decoy contents: untouched
+
+## Scenario 9 (adversarial): malformed invocations are rejected without writing
+appended relative path rc=2
+pr_ready bad task id rc=2
+merged empty URL rc=2
+ledger lines unchanged:       19 ->       19
+
+## Final ledger integrity
+{"records":19,"unique_ids":19,"all_valid":true}

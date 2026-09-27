@@ -1,0 +1,17 @@
+## Scenario 1: worker status command (from generated brief) records timestamped events immediately
+rc=0 after 'working'; ledger lines:        1
+rc=0 after 'needs-decision'; ledger lines:        2
+rc=0 after 'resolved'; ledger lines:        3
+rc=0 after 'done'; ledger lines:        4
+--- state/evt-demo.status (unchanged format):
+working [at=1790508618]: implementation started
+needs-decision [at=1790508622]: [key=api] choose REST or gRPC
+resolved [at=1790508626]: [key=api] captain chose REST
+done [at=1790508628]: ready in branch
+--- state/events.ndjson:
+{"v":1,"id":"0033d66f4ae2e0ca930d80f27e3c205a91a3f6e22ef0a6e2e6dec764627a324b","event":"task.status","task":"evt-demo","ts":1790508618,"time_source":"status","state":"working","key":null,"line":"working [at=1790508618]: implementation started"}
+{"v":1,"id":"c0056969d9e4ce04ef0ec8eb23fc24e3aeca10424678ac237cd7c1023004c12e","event":"task.status","task":"evt-demo","ts":1790508622,"time_source":"status","state":"needs-decision","key":"api","line":"needs-decision [at=1790508622]: [key=api] choose REST or gRPC"}
+{"v":1,"id":"e2118b4f4d10e598404cb08dd85b966bcc4e8777fb0f9ee06774abfc49e8f7a3","event":"task.status","task":"evt-demo","ts":1790508626,"time_source":"status","state":"resolved","key":"api","line":"resolved [at=1790508626]: [key=api] captain chose REST"}
+{"v":1,"id":"0eaab76ba7cf1c39493fca54de4c6e3cd9ab9e780c526133c69bf53e6ecc9766","event":"task.status","task":"evt-demo","ts":1790508628,"time_source":"status","state":"done","key":null,"line":"done [at=1790508628]: ready in branch"}
+--- derived metrics (read-only jq consumer):
+{"task_duration_s":10,"captain_wait_s":4,"all_status_sourced":true}
