@@ -259,7 +259,7 @@ test_nm_round_threshold_suggests_up() {
   pass "fm-midtask-escalation: reaching the no-mistakes fix-round threshold suggests up"
 }
 
-test_clean_first_round_while_working_suggests_down() {
+test_clean_healthy_task_gets_no_suggestion() {
   local home wt crew done_crew out bindir
   home=$(make_home clean)
   write_meta "$home" demo >/dev/null
@@ -272,13 +272,12 @@ test_clean_first_round_while_working_suggests_down() {
     > "$TMP_ROOT/rounds-clean.txt"
   stub_no_mistakes "$bindir" "$wt" 01RUNCLEAN0000000000000 running reviewing "" "$TMP_ROOT/rounds-clean.txt"
 
-  out=$(FM_HOME="$home" FM_MIDTASK_CREW_STATE_BIN="$done_crew" PATH="$bindir:/usr/bin:/bin" "$TOOL" check demo)
-  assert_equals '' "$out" "a finished task is never suggested a relaunch down"
-
   out=$(FM_HOME="$home" FM_MIDTASK_CREW_STATE_BIN="$crew" PATH="$bindir:/usr/bin:/bin" "$TOOL" check demo)
-  assert_contains "$out" "suggests moving down a model class" "a still-working task on a clean first round suggests down"
-  assert_contains "$out" "still working with no step past fix round 1 and 0 blocked reports" "the evidence names the clean mid-task facts"
-  pass "fm-midtask-escalation: a still-working task on a clean first round suggests down"
+  assert_equals '' "$out" "a clean, still-working, zero-blocked task gets no suggestion"
+  out=$(FM_HOME="$home" FM_MIDTASK_CREW_STATE_BIN="$done_crew" PATH="$bindir:/usr/bin:/bin" "$TOOL" check demo)
+  assert_equals '' "$out" "a clean finished task gets no suggestion"
+  assert_absent "$home/state/.midtask-escalation-demo" "no suggestion means no rate-limit record"
+  pass "fm-midtask-escalation: a clean healthy task is never suggested a model-class move"
 }
 
 test_arm_uses_a_distinct_check_id_and_disarm_removes_everything() {
@@ -356,7 +355,7 @@ test_old_failed_state_suggests_up
 test_parked_and_unknown_do_not_count_as_stall
 test_unfired_evidence_drift_does_not_re_suggest
 test_nm_round_threshold_suggests_up
-test_clean_first_round_while_working_suggests_down
+test_clean_healthy_task_gets_no_suggestion
 test_arm_uses_a_distinct_check_id_and_disarm_removes_everything
 test_arm_refuses_without_a_recorded_task
 test_arm_refuses_a_secondmate

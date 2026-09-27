@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# fm-midtask-escalation.sh - suggest a model-class move for one task, from
-# signals firstmate already has, so a struggling or surprisingly-simple
-# worker gets noticed without a person watching every task by hand.
+# fm-midtask-escalation.sh - suggest moving one task up a model class, from
+# signals firstmate already has, so a struggling worker gets noticed without
+# a person watching every task by hand.
 #
 # Usage:
 #   fm-midtask-escalation.sh check <task-id>    print one suggestion line when
@@ -25,7 +25,7 @@
 # This never relaunches, edits, or steers anything. bin/fm-control.sh <id>
 # relaunch --harness --model --effort --note is the one relaunch path, and
 # only firstmate decides to run it, with values it chooses. The suggestion
-# names the task, the evidence, a direction (up or down), the ready-to-run
+# names the task, the evidence, the ready-to-run
 # relaunch command, and - when TypeSafe Jev resolves one - a concrete
 # profile to fill that command's flags with.
 #
@@ -46,8 +46,7 @@
 # task id, so a second reader would be guessing at a private, unstable
 # format instead of reusing a real interface.
 #
-# Direction:
-#   up   (struggling) when ANY of
+# Suggest up (struggling) when ANY of
 #     - no-mistakes used FM_MIDTASK_ROUND_THRESHOLD (default 3) or more fix
 #       rounds on any step of its selected run (no-mistakes chains up to
 #       three rounds per step, so reaching the threshold means the chain the
@@ -58,14 +57,9 @@
 #       seconds old or older while bin/fm-crew-state.sh reports blocked or
 #       failed (parked waits on the captain and unknown means the tooling
 #       cannot see the worker, so neither is read as a struggle)
-#   down (simpler) when NONE of the above hold, bin/fm-crew-state.sh still
-#     reports working, the selected run has not needed more than its first
-#     fix round on any step, and the status log carries no `blocked:`
-#     report; never once the task is done, since there is nothing left to
-#     relaunch
-#   none otherwise; `check` prints nothing.
-# Struggling is decided first: a task that looks both quiet and about to run
-# out of fix rounds is worth the worse read, not the better one.
+# Otherwise `check` prints nothing. There is no down suggestion: no existing
+# state tells a task that proved simpler apart from an ordinary healthy one,
+# so that direction is deferred until such a signal exists.
 #
 # Rate limiting: state/.midtask-escalation-<task-id> records the evidence
 # signature behind the last suggestion this printed, built only from the
@@ -193,11 +187,10 @@ crew_state_word() {  # <task-id> -> state word, or "unknown"
 
 # --- decision ----------------------------------------------------------------
 
-# Sets DIRECTION (up|down|none), REASON, and TRIGGERS (the evidence values of
-# only the rules that fired, for the rate-limit signature).
+# Sets REASON (empty when no up move is due) and TRIGGERS (the evidence
+# values of only the rules that fired, for the rate-limit signature).
 decide() {  # <crew-state>
   local crew_state=$1
-  DIRECTION=none
   REASON=''
   TRIGGERS=''
   local reasons=() triggers=() joined
@@ -219,41 +212,30 @@ decide() {  # <crew-state>
     esac
   fi
 
-  if [ "${#reasons[@]}" -gt 0 ]; then
-    DIRECTION=up
-    joined=$(printf '%s; ' "${reasons[@]}")
-    REASON=${joined%; }
-    TRIGGERS=${triggers[*]}
-    return 0
-  fi
-
-  if [ "$crew_state" = working ] \
-    && [ -n "$ROUNDS_USED" ] && [ "$ROUNDS_USED" -le 1 ] \
-    && [ "$BLOCKED_COUNT" -eq 0 ]; then
-    DIRECTION=down
-    REASON="still working with no step past fix round $ROUNDS_USED and 0 blocked reports"
-    TRIGGERS="clean_rounds=$ROUNDS_USED"
-  fi
+  [ "${#reasons[@]}" -gt 0 ] || return 0
+  joined=$(printf '%s; ' "${reasons[@]}")
+  REASON=${joined%; }
+  TRIGGERS=${triggers[*]}
 }
 
 # --- optional TypeSafe Jev profile --------------------------------------------
 
 # Prints a "--harness ... [--model ...] [--effort ...]" line on stdout when
-# fm-dispatch-resolve.sh resolves one for the synthesized move; prints
+# fm-dispatch-resolve.sh resolves one for the synthesized up move; prints
 # nothing otherwise (off, no rules, ambiguous, escalate, or error). Never
 # fails the caller.
-jev_profile() {  # <id> <direction> <harness> <model> <effort> <project> <reason>
-  local id=$1 direction=$2 harness=$3 model=$4 effort=$5 project=$6 reason=$7
+jev_profile() {  # <id> <harness> <model> <effort> <project> <reason>
+  local id=$1 harness=$2 model=$3 effort=$4 project=$5 reason=$6
   [ -x "$DISPATCH_RESOLVE_BIN" ] || return 0
   local tmp out status line
   tmp=$(mktemp 2>/dev/null) || return 0
   {
     printf '## Captain'"'"'s intent\n'
-    printf 'Mid-task escalation: move task %s to a %s model class because %s.\n' \
-      "$id" "$direction" "$reason"
+    printf 'Mid-task escalation: move task %s up a model class because %s.\n' \
+      "$id" "$reason"
     printf '\n## Firstmate spec\n'
-    printf 'Task %s currently runs harness=%s model=%s effort=%s. Pick the configured dispatch profile that best fits moving it %s a model class from there.\n' \
-      "$id" "${harness:-unknown}" "${model:-default}" "${effort:-default}" "$direction"
+    printf 'Task %s currently runs harness=%s model=%s effort=%s. Pick the configured dispatch profile that best fits moving it up a model class from there.\n' \
+      "$id" "${harness:-unknown}" "${model:-default}" "${effort:-default}"
   } > "$tmp"
   out=$(FM_HOME="$FM_HOME" "$DISPATCH_RESOLVE_BIN" "$tmp" --project "$project" 2>/dev/null)
   rm -f -- "$tmp"
@@ -288,23 +270,23 @@ action_check() {
   nm_evidence "$worktree" "$branch"
   status_evidence "$status_file"
   decide "$crew_state"
-  [ "$DIRECTION" != none ] || return 0
+  [ -n "$REASON" ] || return 0
 
-  local signature="direction=$DIRECTION $TRIGGERS"
+  local signature=$TRIGGERS
 
   local record="$STATE/.midtask-escalation-$id" prev=''
   [ -f "$record" ] && prev=$(cat "$record" 2>/dev/null)
   [ "$signature" != "$prev" ] || return 0
 
   local profile
-  profile=$(jev_profile "$id" "$DIRECTION" "$harness" "$model" "$effort" "$project" "$REASON")
+  profile=$(jev_profile "$id" "$harness" "$model" "$effort" "$project" "$REASON")
 
   local relaunch_cmd="bin/fm-control.sh $id relaunch"
   [ -z "$profile" ] || relaunch_cmd="$relaunch_cmd $profile"
   relaunch_cmd="$relaunch_cmd --note \"mid-task escalation: $REASON\""
 
-  printf 'midtask-escalation: %s suggests moving %s a model class (current %s:%s:%s) - %s - relaunch: %s\n' \
-    "$id" "$DIRECTION" "${harness:--}" "${model:--}" "${effort:--}" "$REASON" "$relaunch_cmd"
+  printf 'midtask-escalation: %s suggests moving up a model class (current %s:%s:%s) - %s - relaunch: %s\n' \
+    "$id" "${harness:--}" "${model:--}" "${effort:--}" "$REASON" "$relaunch_cmd"
 
   local tmp
   tmp=$(umask 077; mktemp "$STATE/.fm-midtask-escalation.XXXXXX" 2>/dev/null) || return 0
