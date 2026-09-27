@@ -16,13 +16,16 @@
 #   <root>/<name>/SKILL.md with a readable YAML frontmatter `name:` and
 #   `description:` (only the description's first line is used, matching a
 #   short catalog entry, not the full multi-line text some SKILL.md files
-#   carry). Two roots are read when present: <project-dir>/.agents/skills
-#   (the project this task is briefed against; --project-dir is optional
-#   because a scout or secondmate charter may name none) and the user-level
-#   skills directory (FM_USER_SKILLS_OVERRIDE, default $HOME/.claude/skills).
+#   carry). These roots are read when present: <project-dir>/.agents/skills
+#   and <project-dir>/.claude/skills (the project this task is briefed
+#   against; --project-dir is optional because a scout or secondmate charter
+#   may name none), the user-level skills directory (FM_USER_SKILLS_OVERRIDE,
+#   default $HOME/.claude/skills), and <installPath>/skills of every Claude
+#   Code plugin listed in $HOME/.claude/plugins/installed_plugins.json and
+#   enabled in $HOME/.claude/settings.json, named <plugin>:<skill>.
 #   Entries are de-duplicated by resolved directory, so a project whose
-#   .agents/skills is the same tree as the user directory (as this repo's own
-#   .claude/skills symlink is) is counted once. A skill directory with no
+#   .agents/skills and .claude/skills are the same tree as the user directory
+#   (as this repo's own .claude/skills symlink is) is counted once. A skill directory with no
 #   readable name or description is skipped rather than guessed.
 #
 # What it does when on with a non-empty catalog: one POST to
@@ -84,7 +87,8 @@ MAX_SKILLS=5
 TS_MODEL=jev-latest
 TS_BASE=https://api.typesafe.ai
 TS_TIMEOUT=5
-USER_SKILLS_DIR="${FM_USER_SKILLS_OVERRIDE:-$HOME/.claude/skills}"
+CLAUDE_DIR="$HOME/.claude"
+USER_SKILLS_DIR="${FM_USER_SKILLS_OVERRIDE:-$CLAUDE_DIR/skills}"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 2; }
 usage() {
@@ -178,8 +182,8 @@ CATALOG_ENTRIES=$(mktemp) || die "mktemp failed"
 SEEN_DIRS=$(mktemp) || { rm -f "$CATALOG_ENTRIES"; die "mktemp failed"; }
 trap 'rm -f "$CATALOG_ENTRIES" "$SEEN_DIRS"' EXIT
 
-collect_catalog_root() {  # <root dir holding one subdir per skill>
-  local root=$1 dir real name desc
+collect_catalog_root() {  # <root dir holding one subdir per skill> [<name prefix>]
+  local root=$1 prefix=${2:-} dir real name desc
   [ -n "$root" ] && [ -d "$root" ] || return 0
   for dir in "$root"/*/; do
     [ -d "$dir" ] || continue
@@ -190,11 +194,27 @@ collect_catalog_root() {  # <root dir holding one subdir per skill>
     IFS=$'\t' read -r name desc < <(fm_skill_frontmatter "${dir}SKILL.md")
     [ -n "$name" ] || name=$(basename "$dir")
     [ -n "$desc" ] || continue
-    printf '%s\t%s\n' "$name" "$desc" >> "$CATALOG_ENTRIES"
+    printf '%s%s\t%s\n' "$prefix" "$name" "$desc" >> "$CATALOG_ENTRIES"
   done
 }
-[ -z "$PROJECT_DIR" ] || collect_catalog_root "$PROJECT_DIR/.agents/skills"
+enabled_plugin_roots() {  # prints <plugin>\t<installPath> per enabled installed plugin
+  local installed="$CLAUDE_DIR/plugins/installed_plugins.json" settings="$CLAUDE_DIR/settings.json"
+  [ -r "$installed" ] && [ -r "$settings" ] || return 0
+  jq -r --slurpfile s "$settings" '
+    ($s[0].enabledPlugins // {}) as $on |
+    (.plugins // {}) | to_entries[] | select($on[.key] == true) |
+    (.key | split("@")[0]) as $plugin | .value[] | select(.installPath) |
+    "\($plugin)\t\(.installPath)"
+  ' "$installed" 2>/dev/null
+}
+if [ -n "$PROJECT_DIR" ]; then
+  collect_catalog_root "$PROJECT_DIR/.agents/skills"
+  collect_catalog_root "$PROJECT_DIR/.claude/skills"
+fi
 collect_catalog_root "$USER_SKILLS_DIR"
+while IFS=$'\t' read -r plugin install_path; do
+  collect_catalog_root "$install_path/skills" "$plugin:"
+done < <(enabled_plugin_roots)
 
 [ -s "$CATALOG_ENTRIES" ] || no_catalog
 

@@ -19,6 +19,7 @@ LOG="$TMP_ROOT/log"
 BRIEF="$TMP_ROOT/brief.md"
 BASE_PATH=$PATH
 mkdir -p "$HOME_DIR" "$USER_SKILLS" "$LOG"
+export HOME="$HOME_DIR"
 
 write_skill() {  # <dir> <name> <description...>
   local dir=$1 name=$2
@@ -204,6 +205,30 @@ write_response "$RESPONSE" 0.92 0.1
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project-dir "$PROJ"
 assert_equals '["skill_1","skill_2"]' "$(jq -c '.questions | keys' "$LOG/body")" "a project catalog identical to the user catalog is counted once"
 pass "project-dir catalog is read, and a shared tree with the user catalog de-duplicates"
+
+# --- project .claude/skills and enabled plugin skills join the catalog ------
+reset_log
+rm -rf "$PROJ"
+write_skill "$PROJ/.claude/skills/epsilon" epsilon "Debug flaky tests."
+PLUGIN_ON="$TMP_ROOT/plugins/on/1.0.0"
+PLUGIN_OFF="$TMP_ROOT/plugins/off/1.0.0"
+write_skill "$PLUGIN_ON/skills/zeta" zeta "Find root causes of bugs."
+write_skill "$PLUGIN_OFF/skills/eta" eta "Write marketing copy."
+mkdir -p "$HOME_DIR/.claude/plugins"
+jq -n --arg on "$PLUGIN_ON" --arg off "$PLUGIN_OFF" '{version: 2, plugins: {
+  "helper@market": [{scope: "user", installPath: $on}],
+  "copy@market": [{scope: "user", installPath: $off}]
+}}' > "$HOME_DIR/.claude/plugins/installed_plugins.json"
+printf '%s\n' '{"enabledPlugins": {"helper@market": true, "copy@market": false}}' > "$HOME_DIR/.claude/settings.json"
+write_response "$RESPONSE" 0.9 0.8
+_out=$(PATH="$FAKEBIN:$BASE_PATH" FM_HOME="$HOME_DIR" FM_USER_SKILLS_OVERRIDE="$EMPTY_USER_FOR_PROJ" TYPESAFE_API_KEY=$KEY "$TOOL" "$BRIEF" --project-dir "$PROJ" 2> "$TMP_ROOT/stderr")
+assert_equals '["skill_1","skill_2"]' "$(jq -c '.questions | keys' "$LOG/body")" "project .claude/skills and the enabled plugin each add one question"
+assert_contains "$_out" 'skill: epsilon (Debug flaky tests.)' "the project .claude/skills skill appears in the catalog"
+assert_contains "$_out" 'skill: helper:zeta (Find root causes of bugs.)' "an enabled plugin skill is named plugin:skill"
+assert_not_contains "$_out" 'eta (Write marketing copy.)' "a disabled plugin's skills stay out of the catalog"
+assert_contains "$_out" '  line: Load these skills: epsilon, helper:zeta' "the suggested line names plugin skills by plugin:skill"
+rm -rf "$HOME_DIR/.claude"
+pass "project .claude/skills and enabled plugin skills (plugin:skill) join the catalog"
 
 # --- a skill without a readable description is skipped -----------------------
 reset_log
