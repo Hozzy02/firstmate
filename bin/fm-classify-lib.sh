@@ -1718,6 +1718,8 @@ EOF
     fi
   fi
   if [ "$rc" -eq 0 ]; then
+    # fm-events.sh saves its cursor under this lock; removing the log with it
+    # keeps an in-flight capture from restoring a stale cursor for a reused id.
     if fm_lock_acquire_wait "$state/.events.lock"; then
       rm -f -- "$state/$task.status" "$state/.$task.events-cursor" || rc=1
       fm_lock_release "$state/.events.lock" || rc=1
