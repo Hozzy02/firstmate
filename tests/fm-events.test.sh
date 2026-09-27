@@ -54,11 +54,21 @@ printf 'working [at=1790000300]: reused task id\n' > "$STATUS"
 capture || fail 'task-id reuse capture failed'
 assert_equals 7 "$(wc -l < "$LEDGER" | tr -d ' ')" 'reused task id has a new event identity'
 
+FM_STATE_OVERRIDE="$STATE_DIR" bash -c '
+  . "$1/bin/fm-wake-lib.sh"
+  . "$1/bin/fm-classify-lib.sh"
+  status_retire_presentation_task "$2" task-one
+' _ "$ROOT" "$STATE_DIR" || fail 'task retirement failed'
+[ ! -e "$STATE_DIR/.task-one.events-cursor" ] || fail 'task retirement left the events cursor for a reused id'
+printf 'working [at=1790000400]: second reuse\n' > "$STATUS"
+capture || fail 'post-retirement capture failed'
+assert_equals 8 "$(wc -l < "$LEDGER" | tr -d ' ')" 'retired task id starts capture from the first line'
+
 PR=https://example.test/acme/repo/pull/8
 FM_STATE_OVERRIDE="$STATE_DIR" "$ROOT/bin/fm-events.sh" pr_ready task-one "$PR" || fail 'PR registration event failed'
 FM_STATE_OVERRIDE="$STATE_DIR" "$ROOT/bin/fm-events.sh" merged task-one "$PR" || fail 'PR merge event failed'
 FM_STATE_OVERRIDE="$STATE_DIR" "$ROOT/bin/fm-events.sh" merged task-one "$PR" || fail 'repeated PR merge event failed'
-assert_equals 9 "$(wc -l < "$LEDGER" | tr -d ' ')" 'one record per PR event'
+assert_equals 10 "$(wc -l < "$LEDGER" | tr -d ' ')" 'one record per PR event'
 jq -e -s --arg pr "$PR" '
   (map(select(.event == "task.pr_ready" and .pr == $pr)) | length) == 1 and
   (map(select(.event == "task.merged" and .pr == $pr)) | length) == 1 and
