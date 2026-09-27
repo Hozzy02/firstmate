@@ -1179,6 +1179,50 @@ Firstmate passes its profile line unless it states a reason to override, such as
 
 The live rule-match evidence is recorded in [`verification/dispatch-resolve.md`](verification/dispatch-resolve.md).
 
+## Skill routing (env TYPESAFE_API_KEY)
+
+`bin/fm-skill-route.sh` suggests a short list of installed skills relevant to a written brief with typesafe.ai's System One model (Jev), opt-in on the same `TYPESAFE_API_KEY` as "Typed dispatch resolution" above, with the same environment-then-`.env` precedence and the same off behavior: one `skill-route: off` line on stderr, nothing on stdout, exit 0, no network call.
+This section is the single owner of the tool's operator contract; the script header owns its exact flags and output lines.
+
+```sh
+bin/fm-skill-route.sh data/<id>/brief.md --project <name> --project-dir <path>   # TOON block on stdout
+```
+
+**When firstmate invokes the router**
+
+Firstmate runs it directly on the written brief before spawn, the same timing as the dispatch resolver, and treats its suggestion as advisory: on a `clear` result it may add, edit, or drop the printed `line:` text under `## Firstmate spec`, and nothing is auto-loaded or auto-added to the brief.
+
+**The catalog**
+
+The catalog is every installed skill visible to the worker: one entry per `<root>/<name>/SKILL.md` with a readable frontmatter `name:` and `description:` (only the description's first line, not its full multi-line text), read from `<project-dir>/.agents/skills` and `<project-dir>/.claude/skills` when `--project-dir` names a readable clone, the user-level skills directory (`FM_USER_SKILLS_OVERRIDE`, default `$HOME/.claude/skills`), and the `skills/` directory of every Claude Code plugin listed in `$HOME/.claude/plugins/installed_plugins.json` and enabled in `$HOME/.claude/settings.json`, named `<plugin>:<skill>`.
+Entries are de-duplicated by resolved directory, so a project whose `.agents/skills` or `.claude/skills` is the same tree as the user directory is counted once.
+An empty catalog, from an absent or empty tree at every root, returns `none` with reason `no installed skills found` without a model request.
+
+**What the model receives**
+
+The tool sends the project name and the brief's task-specific text (the same `## Captain's intent` and `## Firstmate spec` sections, read by the same parser `bin/fm-dispatch-resolve.sh` uses) as state, and asks one Noul (yes/no probability) question per catalog skill: whether that skill would help a worker completing the task.
+Noul, not Choice, because several skills may independently apply to one task; a Choice forces a single pick and does not fit an arbitrary-length catalog.
+The model sees only each skill's name, one-line description, and the task text - never the wider catalog, safety language, or brief boilerplate.
+
+**Selection**
+
+Every catalog skill clearing a 0.6 probability floor is a candidate; up to 5, ranked by probability, become the suggested list.
+No candidate clearing the floor is `none`, with reason `no skill cleared confidence floor 0.6`; every skill's probability is still printed for transparency.
+
+**Outcomes and exit status**
+
+| Result | Meaning |
+| --- | --- |
+| `clear` | A `line:` ready to add under `## Firstmate spec`. |
+| `none` | No installed skill, or none cleared the floor. |
+| `error` | API, network, response, curl, or catalog failure. |
+
+Every result above exits 0; only a usage error (unreadable brief or missing `jq`) exits 2.
+
+**Key handling and fixed settings**
+
+The same secret handling as the dispatch resolver applies: the key reaches `curl` only as a header read from a file descriptor, never on argv or in a child's environment, and the endpoint, model, floor, and five-second timeout are fixed the same way.
+
 ## Toolchain
 
 On session start the first mate detects what its required toolchain is missing or too old and lists each problem with either an exact install command or manual instructions.
@@ -2284,7 +2328,7 @@ FMX_RELAY_URL=https://myfirstmate.io   # optional Relay endpoint override, mainl
 FMX_ENV_FILE=           # optional alternate .env file for direct Relay client invocations; bootstrap still checks $FM_HOME/.env
 FMX_DRY_RUN=            # truthy previews Relay replies and dismissals to state/x-outbox/ without posting or requiring a token
 FMX_X_REPLY_MAX_CHARS=280   # X reply per-message split budget; values below 50 clamp to 50
-TYPESAFE_API_KEY=       # typed dispatch resolution opt-in, from the environment or .env; absent means bin/fm-dispatch-resolve.sh is off (docs/configuration.md "Typed dispatch resolution")
+TYPESAFE_API_KEY=       # typed dispatch resolution and skill routing opt-in, from the environment or .env; absent means bin/fm-dispatch-resolve.sh and bin/fm-skill-route.sh are off (docs/configuration.md "Typed dispatch resolution", "Skill routing")
 FMX_DISCORD_REPLY_MAX_CHARS=1900   # Discord reply per-message split budget; values below 50 clamp to 50, values above 2000 reset to 1900
 FMX_X_THREAD_MAX=25     # maximum messages in one auto-split reply thread
 FMX_FOLLOWUP_MAX_AGE_SECS=604800   # local window for posting Relay completion follow-ups (7 days)
