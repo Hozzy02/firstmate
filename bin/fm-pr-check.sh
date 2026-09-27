@@ -216,6 +216,8 @@ else
   echo "error: could not publish PR poll" >&2
   exit 1
 fi
+# Record the review-ready point for later PR cycle timing.
+[ "${FM_PR_CHECK_MERGE:-}" = 1 ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-events.sh" pr_ready "$ID" "$URL" || true
 # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
 # The merge-time re-record is not a new review-ready PR, so it writes nothing.
 [ ! -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/fleet-ledger" ] || [ "${FM_PR_CHECK_MERGE:-}" = 1 ] \
