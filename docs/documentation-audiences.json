@@ -329,12 +329,20 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/credentials.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/documentation-audiences.md",
       "audience": "maintainer-architecture"
     },
     {
       "path": "docs/extension-bindings.md",
       "audience": "maintainer-architecture"
+    },
+    {
+      "path": "docs/examples/credentials.json",
+      "audience": "operator-example"
     },
     {
       "path": "docs/examples/crew-dispatch.json",
@@ -375,6 +383,10 @@
     {
       "path": "docs/gitlab-merge-watch.md",
       "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/events.md",
+      "audience": "operator-current"
     },
     {
       "path": "docs/fleet-ledger.md",
