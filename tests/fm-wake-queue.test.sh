@@ -2456,6 +2456,31 @@ test_self_held_lock_reclaims_instead_of_deadlocking() {
   pass "an abandoned same-process lock hold is reclaimed; a parent's live hold is not"
 }
 
+# A torn-down state directory must not strand a waiter: the watcher's per-cycle
+# events capture used to spin forever here and outlive its deleted home.
+test_lock_wait_stops_when_its_directory_is_gone() {
+  local dir pid i rc
+  dir=$(make_case lock-dir-gone)
+  bash -c '. "$1"; fm_lock_acquire_wait "$2/.fixture.lock"' \
+    _ "$ROOT/bin/fm-wake-lib.sh" "$dir/removed-state" &
+  pid=$!
+  i=0
+  while [ "$i" -lt 50 ] && kill -0 "$pid" 2>/dev/null; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    fail "a lock wait in a removed directory never returned"
+  fi
+  rc=0
+  wait "$pid" || rc=$?
+  [ "$rc" -eq 1 ] || fail "a lock wait in a removed directory returned $rc, not 1"
+  [ ! -e "$dir/removed-state" ] || fail "a lock wait recreated its removed directory"
+  pass "a lock wait gives up once its directory is gone"
+}
+
 test_subshell_lock_ownership_without_bashpid() {
   local dir state rc
   dir=$(make_case subshell-lock-ownership)
@@ -3371,6 +3396,7 @@ SH
 }
 
 test_self_held_lock_reclaims_instead_of_deadlocking
+test_lock_wait_stops_when_its_directory_is_gone
 test_subshell_lock_ownership_without_bashpid
 test_bounded_lock_handoff_after_contention
 test_live_presentation_holder_is_deadlined_without_weakening_ack
