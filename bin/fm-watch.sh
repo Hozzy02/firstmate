@@ -2377,6 +2377,14 @@ watcher_beat() {
   touch "$STATE/.last-watcher-beat"
 }
 
+# The beacon above means "progress happened" and fires several times per cycle,
+# so it cannot also answer "did a cycle complete". Turnover gets its own signal,
+# touched exactly once per cycle immediately before the terminal wait and at no
+# progress point, so a reader can tell the two facts apart.
+cycle_turnover() {
+  touch "$STATE/.last-cycle-turnover"
+}
+
 while ! fm_lock_try_acquire "$WATCH_LOCK"; do
   if [ -n "${FM_LOCK_HELD_PID:-}" ]; then
     if [ -e "$BEAT" ]; then
@@ -3236,5 +3244,6 @@ EOF
 
   # Terminal wait: a bounded native-event wait for push-capable homes (herdr),
   # else the blind poll sleep. See event_wait_or_sleep.
+  cycle_turnover
   event_wait_or_sleep
 done
