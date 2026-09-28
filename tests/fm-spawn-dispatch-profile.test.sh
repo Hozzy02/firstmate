@@ -139,6 +139,8 @@ test_no_profile_keeps_claude_profile_defaults() {
   expect_code 0 "$status" "claude spawn without profile flags should succeed"
   assert_contains "$out" "spawned $id harness=claude" "spawn did not report claude"
   assert_meta_profile "$HOME_DIR/state/$id.meta" claude default default
+  assert_present "$HOME_DIR/state/midtask-$id.check.sh" "a ship spawn arms its mid-task escalation check"
+  assert_present "$HOME_DIR/state/midtask-$id.check-trust" "a ship spawn registers its mid-task escalation check"
 
   launch=$(cat "$LAUNCH_LOG")
   expected=$(claude_expected_launch "$launch" "$HOME_DIR" "$id" --dangerously-skip-permissions)
@@ -195,6 +197,7 @@ test_claude_secondmate_launch_brief_publishes_into_its_own_home() {
     run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
   status=$?
   expect_code 0 "$status" "secondmate claude spawn for the doorbell check should succeed"$'\n'"$out"
+  assert_absent "$HOME_DIR/state/midtask-$id.check.sh" "a secondmate spawn never arms a mid-task escalation check"
   launch=$(cat "$LAUNCH_LOG")
   doorbell=$(claude_launch_brief_arg "$launch")
   [ "$(printf '%s' "$doorbell" | "$ROOT/bin/fm-operational-input.sh" doorbell-kind)" = launch-brief ] \

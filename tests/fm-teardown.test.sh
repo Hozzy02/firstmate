@@ -727,6 +727,24 @@ test_teardown_closes_the_backlog_item_itself() {
   pass "teardown closes its own backlog item before reporting success"
 }
 
+test_teardown_removes_the_midtask_escalation_check() {
+  local case_dir
+  case_dir=$(make_case midtask-escalation)
+  write_meta "$case_dir" local-only ship
+  wt_commit "$case_dir" "fix the thing"
+  add_fork_with_pushed_branch "$case_dir"
+  FM_HOME="$case_dir" FM_STATE_OVERRIDE="$case_dir/state" "$ROOT/bin/fm-midtask-escalation.sh" arm task-x1 >/dev/null \
+    || fail "midtask-escalation: arm failed"
+  printf 'direction=up blocked=2' > "$case_dir/state/.midtask-escalation-task-x1"
+
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "midtask-escalation: teardown failed: $(cat "$case_dir/stderr")"
+  assert_absent "$case_dir/state/midtask-task-x1.check.sh" "teardown left the mid-task escalation shim registered"
+  assert_absent "$case_dir/state/midtask-task-x1.check-trust" "teardown left the mid-task escalation trust binding"
+  assert_absent "$case_dir/state/.midtask-escalation-task-x1" "teardown left the mid-task escalation rate-limit record"
+  pass "teardown removes the task's mid-task escalation check and rate-limit record"
+}
+
 test_teardown_manual_backend_leaves_the_backlog_to_the_operator() {
   local case_dir out backlog_path
   case_dir=$(make_case tasks-axi-manual-optout)
@@ -4066,6 +4084,7 @@ test_forced_secondmate_own_missing_adapter_sibling_refuses_before_child_cleanup
 test_retained_sources_still_reach_the_ordinary_refusal
 test_local_only_fork_remote_allows
 test_teardown_closes_the_backlog_item_itself
+test_teardown_removes_the_midtask_escalation_check
 test_teardown_manual_backend_leaves_the_backlog_to_the_operator
 test_local_only_truly_unpushed_refuses
 test_local_only_merged_to_local_main_allows
