@@ -325,11 +325,11 @@
       "audience": "operator-current"
     },
     {
-      "path": "docs/credentials.md",
+      "path": "docs/captain-hold-lifecycle.md",
       "audience": "maintainer-architecture"
     },
     {
-      "path": "docs/captain-hold-lifecycle.md",
+      "path": "docs/credentials.md",
       "audience": "maintainer-architecture"
     },
     {
@@ -341,11 +341,11 @@
       "audience": "maintainer-architecture"
     },
     {
-      "path": "docs/examples/crew-dispatch.json",
+      "path": "docs/examples/credentials.json",
       "audience": "operator-example"
     },
     {
-      "path": "docs/examples/credentials.json",
+      "path": "docs/examples/crew-dispatch.json",
       "audience": "operator-example"
     },
     {
@@ -395,6 +395,10 @@
     {
       "path": "docs/herdr-backend.md",
       "audience": "operator-current"
+    },
+    {
+      "path": "docs/jev-guards.md",
+      "audience": "maintainer-architecture"
     },
     {
       "path": "docs/orca-backend.md",
@@ -555,6 +559,34 @@
     {
       "path": "tests/captures/no-mistakes-v1.70.1/README.md",
       "audience": "maintainer-verification"
+    },
+    {
+      "path": ".agents/skills/agent-skill-trigger-index/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/away-quiet-supervision/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/operational-home-layout/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/scout-completion/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/session-start-recovery/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/ship-landing/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/validation-supervision/SKILL.md",
+      "audience": "agent-runtime"
     }
   ]
 }
