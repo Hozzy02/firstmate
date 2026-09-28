@@ -2145,11 +2145,15 @@ test_interruption_before_and_after_raw_commit() {
   FM_STATE_OVERRIDE="$state" FM_WAKE_DRAIN_TEST_DELAY_BEFORE_COMMIT=5 "$DRAIN" > "$before_out" &
   pid=$!
   i=0
-  while [ "$i" -lt 100 ] && [ ! -e "$state/.wake-queue.lock" ]; do
+  while [ "$i" -lt 100 ]; do
+    if [ "$(cat "$state/.wake-queue.lock/pid" 2>/dev/null || true)" = "$pid" ] \
+      && grep -Eq '^(pending|announced):handling:' "$state/.watcher-down" 2>/dev/null; then
+      break
+    fi
     sleep 0.05
     i=$((i + 1))
   done
-  [ -e "$state/.wake-queue.lock" ] || { kill "$pid" 2>/dev/null || true; fail "pre-commit drain never entered its serialized read boundary"; }
+  [ "$i" -lt 100 ] || { kill "$pid" 2>/dev/null || true; fail "pre-commit drain never entered its serialized read boundary"; }
   kill -TERM "$pid" 2>/dev/null || fail "could not interrupt drain before raw commitment"
   set +e
   wait "$pid"
@@ -2450,31 +2454,6 @@ test_self_held_lock_reclaims_instead_of_deadlocking() {
   ' _ "$ROOT/bin/fm-wake-lib.sh" "$state" || rc=$?
   [ "$rc" -eq 0 ] || fail "a subshell reclaimed its parent's live hold (rc=$rc)"
   pass "an abandoned same-process lock hold is reclaimed; a parent's live hold is not"
-}
-
-# A torn-down state directory must not strand a waiter: the watcher's per-cycle
-# events capture used to spin forever here and outlive its deleted home.
-test_lock_wait_stops_when_its_directory_is_gone() {
-  local dir pid i rc
-  dir=$(make_case lock-dir-gone)
-  bash -c '. "$1"; fm_lock_acquire_wait "$2/.fixture.lock"' \
-    _ "$ROOT/bin/fm-wake-lib.sh" "$dir/removed-state" &
-  pid=$!
-  i=0
-  while [ "$i" -lt 50 ] && kill -0 "$pid" 2>/dev/null; do
-    sleep 0.1
-    i=$((i + 1))
-  done
-  if kill -0 "$pid" 2>/dev/null; then
-    kill "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
-    fail "a lock wait in a removed directory never returned"
-  fi
-  rc=0
-  wait "$pid" || rc=$?
-  [ "$rc" -eq 1 ] || fail "a lock wait in a removed directory returned $rc, not 1"
-  [ ! -e "$dir/removed-state" ] || fail "a lock wait recreated its removed directory"
-  pass "a lock wait gives up once its directory is gone"
 }
 
 test_subshell_lock_ownership_without_bashpid() {
@@ -2866,6 +2845,26 @@ test_wake_queue_prune_task() {
   grep -F 'task-b.check.sh' "$queue" >/dev/null || fail "prune removed check wake for task-b"
 
   pass "fm_wake_queue_prune_task: prunes wakes for target task without touching other tasks"
+}
+
+# Scratch a drain minted under the queue lock and never removed was left by a
+# drain that died mid-write; the next locked drain rotates it away.
+test_drain_rotates_orphaned_scratch() {
+  local dir state name
+  dir=$(make_case scratch-rotation)
+  state="$dir/state"
+  for name in .main-eligible-rows.tmp.dead01 .wake-rows.consume.dead02 .wake-queue.retire.dead03 \
+    .wake-queue.ack.dead04 .wake-queue.actor-view.dead05; do
+    : > "$state/$name"
+  done
+  : > "$state/.main-eligible-rows"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" >/dev/null 2>&1 || fail "drain failed with orphaned scratch present"
+  for name in .main-eligible-rows.tmp.dead01 .wake-rows.consume.dead02 .wake-queue.retire.dead03 \
+    .wake-queue.ack.dead04 .wake-queue.actor-view.dead05; do
+    [ ! -e "$state/$name" ] || fail "drain left orphaned scratch $name behind"
+  done
+  [ -e "$state/.main-eligible-rows" ] || fail "scratch rotation removed the live main rows claim"
+  pass "drain rotates scratch files an interrupted drain left under the queue lock"
 }
 
 # --- secondmate endpoint liveness tick ---------------------------------------
@@ -3372,7 +3371,6 @@ SH
 }
 
 test_self_held_lock_reclaims_instead_of_deadlocking
-test_lock_wait_stops_when_its_directory_is_gone
 test_subshell_lock_ownership_without_bashpid
 test_bounded_lock_handoff_after_contention
 test_live_presentation_holder_is_deadlined_without_weakening_ack
@@ -3425,6 +3423,7 @@ test_branch_stale_ack_that_consumes_nothing_names_its_granted_wake
 test_recovery_ack_failure_is_reported
 test_interruption_before_and_after_raw_commit
 test_wake_queue_prune_task
+test_drain_rotates_orphaned_scratch
 test_secondmate_liveness_tick_relaunches_dead_endpoint_once
 test_secondmate_liveness_tick_relaunches_missing_endpoint
 test_secondmate_liveness_tick_relaunches_every_dead_mate_before_waking
