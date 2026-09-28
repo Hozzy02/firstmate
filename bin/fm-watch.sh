@@ -2365,6 +2365,26 @@ evict_stalled_holder() {
 EVICTED_PID=
 EVICTED_BEAT_AGE=
 BEAT="$STATE/.last-watcher-beat"
+
+# watcher_beat: touch the liveness beacon. Called once at the top of every
+# cycle and again at proven-progress points inside a long cycle (after each
+# check in the sweep, after each stale-pane window's capture) so a healthy
+# watcher's beacon ages by at most one step's own bound rather than by the
+# whole cycle's accumulated work - the sum of check sweeps, secondmate reads,
+# and pane captures can otherwise walk past the stale grace even when no
+# single step hangs (data/firstmate-watcher-slow-cycle/report.md).
+watcher_beat() {
+  touch "$STATE/.last-watcher-beat"
+}
+
+# The beacon above means "progress happened" and fires several times per cycle,
+# so it cannot also answer "did a cycle complete". Turnover gets its own signal,
+# touched exactly once per cycle immediately before the terminal wait and at no
+# progress point, so a reader can tell the two facts apart.
+cycle_turnover() {
+  touch "$STATE/.last-cycle-turnover"
+}
+
 while ! fm_lock_try_acquire "$WATCH_LOCK"; do
   if [ -n "${FM_LOCK_HELD_PID:-}" ]; then
     if [ -e "$BEAT" ]; then
@@ -2618,7 +2638,7 @@ while :; do
 
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
-  touch "$STATE/.last-watcher-beat"
+  watcher_beat
 
   # Recover status transitions written outside the worker's status command.
   FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-events.sh" capture || true
@@ -2702,6 +2722,10 @@ while :; do
     contribution_check_output=
     for c in "$STATE"/*.check.sh; do
       [ -e "$c" ] || continue
+      # Proven-progress beat: each check is individually bounded by
+      # CHECK_TIMEOUT, but the sweep's sum across every registered check is
+      # not, so touch here rather than only once at the top of the cycle.
+      watcher_beat
       is_pr_poll=0
       if [ "$(basename "$c")" = x-watch.check.sh ]; then
         if fmx_poll_shim_valid "$c" "$FM_HOME" "$FM_ROOT" \
@@ -2976,7 +3000,14 @@ EOF
     if [ "$kind" = secondmate ] && ! status_is_paused_or_captain_held "$last"; then
       continue
     fi
-    tail40=$(fm_backend_capture "$(window_backend "$w")" "$w" 40 "$(window_label "$w")" 2>/dev/null) || continue
+    capture_rc=0
+    tail40=$(fm_backend_capture "$(window_backend "$w")" "$w" 40 "$(window_label "$w")" 2>/dev/null) || capture_rc=$?
+    # Proven-progress beat: this capture can itself run up to the backend's
+    # own RPC bound, and this loop runs once per recorded window, so the
+    # accumulation across many windows is not otherwise beaconed until the
+    # next cycle. A bounded capture that failed is still progress.
+    watcher_beat
+    [ "$capture_rc" -eq 0 ] || continue
     h=$(printf '%s' "$tail40" | hash_pane)
     hf="$STATE/.hash-$key"
     cf="$STATE/.count-$key"
@@ -3213,5 +3244,6 @@ EOF
 
   # Terminal wait: a bounded native-event wait for push-capable homes (herdr),
   # else the blind poll sleep. See event_wait_or_sleep.
+  cycle_turnover
   event_wait_or_sleep
 done

@@ -387,6 +387,94 @@ test_cli_helper_sets_env_and_appends_trailing_session_flag() {
   pass "fm_backend_herdr_cli: sets HERDR_SESSION AND appends a trailing --session flag on every call"
 }
 
+# --- FM_BACKEND_HERDR_CLI_TIMEOUT: bounding a wedged herdr RPC --------------
+#
+# data/firstmate-watcher-slow-cycle/report.md: fm_backend_herdr_cli had no
+# wall-clock timeout at all, so a herdr server wedged under host load (one
+# server process is shared by every home/lane on the machine) blocked the
+# watcher's per-secondmate liveness read and per-window stale-pane capture for
+# however long the socket stayed silent, stalling the liveness beacon past its
+# stale grace. These drive a REAL hung `herdr` process (not a canned failure
+# exit code, which the recovery-grade tests above already cover) to prove the
+# bound actually fires, and that a bound-killed RPC classifies the same
+# conservative way as any other unreadable RPC: never as a dead/missing pane.
+
+make_wedged_herdr_fakebin() {  # <dir> <sleep-seconds> -> echoes fakebin dir
+  local dir=$1 secs=$2 fb="$1/fakebin"
+  mkdir -p "$fb"
+  cat > "$fb/herdr" <<SH
+#!/usr/bin/env bash
+sleep $secs
+printf '{}\n'
+SH
+  chmod +x "$fb/herdr"
+  printf '%s\n' "$fb"
+}
+
+test_cli_bounded_by_configurable_timeout() {
+  local dir fb start end elapsed rc out
+  dir="$TMP_ROOT/cli-timeout"; mkdir -p "$dir"
+  fb=$(make_wedged_herdr_fakebin "$dir" 30)
+  start=$(date +%s)
+  out=$(PATH="$fb:$PATH" FM_BACKEND_HERDR_CLI_TIMEOUT=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_cli fmtest status --json' "$ROOT" 2>/dev/null)
+  rc=$?
+  end=$(date +%s)
+  elapsed=$((end - start))
+  [ "$rc" -eq 124 ] \
+    || fail "a wedged herdr RPC must be killed at the configured bound and report 124 (fm_run_timed's bound-hit convention), got rc=$rc"
+  [ -z "$out" ] \
+    || fail "a bound-killed RPC must not read back as a successful result, got '$out'"
+  [ "$elapsed" -lt 10 ] \
+    || fail "fm_backend_herdr_cli must not block past its configured FM_BACKEND_HERDR_CLI_TIMEOUT; took ${elapsed}s against a 30s hang"
+  pass "fm_backend_herdr_cli: a wedged herdr RPC is killed at the configurable FM_BACKEND_HERDR_CLI_TIMEOUT bound instead of hanging the caller"
+}
+
+test_cli_timeout_zero_disables_the_bound() {
+  local dir fb out
+  dir="$TMP_ROOT/cli-timeout-disabled"; mkdir -p "$dir"
+  fb=$(make_wedged_herdr_fakebin "$dir" 1)
+  out=$(PATH="$fb:$PATH" FM_BACKEND_HERDR_CLI_TIMEOUT=0 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_cli fmtest status --json' "$ROOT" 2>/dev/null)
+  expect_code 0 $? "FM_BACKEND_HERDR_CLI_TIMEOUT=0 must disable the bound and run the command directly"
+  [ "$out" = "{}" ] || fail "an unbounded call should still return the fake's real output, got '$out'"
+  pass "fm_backend_herdr_cli: FM_BACKEND_HERDR_CLI_TIMEOUT=0 disables the bound (a non-positive bound is not a bound)"
+}
+
+test_agent_state_unreadable_not_dead_on_wedged_rpc() {
+  local dir fb out
+  dir="$TMP_ROOT/agent-state-timeout"; mkdir -p "$dir"
+  fb=$(make_wedged_herdr_fakebin "$dir" 30)
+  out=$(PATH="$fb:$PATH" FM_BACKEND_HERDR_CLI_TIMEOUT=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_agent_state fmtest:w1:p2' "$ROOT" 2>/dev/null)
+  [ "$out" = unreadable ] \
+    || fail "a genuinely wedged herdr RPC must classify as unreadable, never dead/missing (a stale liveness read must not evict a live secondmate); got '$out'"
+  pass "fm_backend_herdr_agent_state: a wedged (bound-killed) RPC reads unreadable, never dead - never grounds for eviction"
+}
+
+test_server_ensure_gives_up_when_status_rpc_is_wedged() {
+  local dir fb start elapsed rc
+  dir="$TMP_ROOT/server-ensure-timeout"; mkdir -p "$dir/fakebin"
+  fb="$dir/fakebin"
+  cat > "$fb/herdr" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$dir/calls"
+sleep 30
+SH
+  chmod +x "$fb/herdr"
+  start=$(date +%s)
+  PATH="$fb:$PATH" FM_BACKEND_HERDR_CLI_TIMEOUT=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT" >/dev/null 2>&1
+  rc=$?
+  elapsed=$(( $(date +%s) - start ))
+  [ "$rc" -ne 0 ] || fail "server_ensure must fail when the status RPC hits its bound, got rc=0"
+  [ "$elapsed" -lt 10 ] \
+    || fail "server_ensure must not multiply the RPC bound by its relaunch/poll loop against an unresponsive server; took ${elapsed}s"
+  grep -q '^server' "$dir/calls" 2>/dev/null \
+    && fail "server_ensure must not relaunch a server whose status RPC merely timed out; calls: $(cat "$dir/calls")"
+  pass "fm_backend_herdr_server_ensure: a bound-killed status RPC fails fast instead of relaunching and polling an unresponsive server"
+}
+
 # --- client selection: a stale client shadowing a compatible one -------------
 #
 # Two herdr clients on PATH is a real host shape (a self-updated ~/.local/bin
@@ -5715,6 +5803,10 @@ test_workspace_label_secondmate_marker_trims_whitespace
 test_workspace_label_empty_marker_falls_back_to_primary
 test_workspace_label_different_secondmates_get_different_labels
 test_cli_helper_sets_env_and_appends_trailing_session_flag
+test_cli_bounded_by_configurable_timeout
+test_cli_timeout_zero_disables_the_bound
+test_agent_state_unreadable_not_dead_on_wedged_rpc
+test_server_ensure_gives_up_when_status_rpc_is_wedged
 test_agent_state_bypasses_a_stale_client_shadowing_a_compatible_one
 test_recovery_grade_read_widens_only_at_its_own_boundary
 test_stale_registration_over_a_shell_only_pane_is_agent_free
