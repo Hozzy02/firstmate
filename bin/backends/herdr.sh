@@ -508,7 +508,7 @@ fm_backend_herdr_client_candidates() {
 # client did not report. Never fails.
 fm_backend_herdr_client_status() {  # <bin> <session>
   local bin=$1 session=$2 out
-  out=$(HERDR_SESSION="$session" "$bin" status --json --session "$session" 2>/dev/null) || out=
+  out=$(HERDR_SESSION="$session" fm_backend_herdr_bounded "$bin" status --json --session "$session" 2>/dev/null) || out=
   printf '%s' "$out" | jq -r '
     [ (if (.server | type) == "object" and .server.running != null then (.server.running | tostring) else "" end),
       (if (.server | type) == "object" and (.server | has("compatible"))
@@ -1694,8 +1694,13 @@ fm_backend_herdr_projection_order_best_effort() {  # <session> <created-workspac
 # inherited from whichever agent happened to start it. Bounded poll for the
 # server to report running.
 fm_backend_herdr_server_ensure() {  # <session>
-  local session=$1 running out i
-  running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
+  local session=$1 running out rc i
+  rc=0; out=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null) || rc=$?
+  if fm_timed_out "$rc"; then
+    echo "error: herdr server for session '$session' did not answer status within ${FM_BACKEND_HERDR_CLI_TIMEOUT}s" >&2
+    return 1
+  fi
+  running=$(printf '%s' "$out" | jq -r '.server.running // false' 2>/dev/null)
   [ "$running" = "true" ] && return 0
   (
     unset FM_HOME FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE \
@@ -1703,7 +1708,12 @@ fm_backend_herdr_server_ensure() {  # <session>
     fm_backend_herdr_cli "$session" server >/dev/null 2>&1 &
   ) || return 1
   for i in $(seq 1 20); do
-    running=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null | jq -r '.server.running // false' 2>/dev/null)
+    rc=0; out=$(fm_backend_herdr_cli "$session" status --json 2>/dev/null) || rc=$?
+    if fm_timed_out "$rc"; then
+      echo "error: herdr server for session '$session' did not answer status within ${FM_BACKEND_HERDR_CLI_TIMEOUT}s" >&2
+      return 1
+    fi
+    running=$(printf '%s' "$out" | jq -r '.server.running // false' 2>/dev/null)
     [ "$running" = "true" ] && return 0
     sleep 0.5
   done

@@ -452,6 +452,29 @@ test_agent_state_unreadable_not_dead_on_wedged_rpc() {
   pass "fm_backend_herdr_agent_state: a wedged (bound-killed) RPC reads unreadable, never dead - never grounds for eviction"
 }
 
+test_server_ensure_gives_up_when_status_rpc_is_wedged() {
+  local dir fb start elapsed rc
+  dir="$TMP_ROOT/server-ensure-timeout"; mkdir -p "$dir/fakebin"
+  fb="$dir/fakebin"
+  cat > "$fb/herdr" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$dir/calls"
+sleep 30
+SH
+  chmod +x "$fb/herdr"
+  start=$(date +%s)
+  PATH="$fb:$PATH" FM_BACKEND_HERDR_CLI_TIMEOUT=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_server_ensure fmtest' "$ROOT" >/dev/null 2>&1
+  rc=$?
+  elapsed=$(( $(date +%s) - start ))
+  [ "$rc" -ne 0 ] || fail "server_ensure must fail when the status RPC hits its bound, got rc=0"
+  [ "$elapsed" -lt 10 ] \
+    || fail "server_ensure must not multiply the RPC bound by its relaunch/poll loop against an unresponsive server; took ${elapsed}s"
+  grep -q '^server' "$dir/calls" 2>/dev/null \
+    && fail "server_ensure must not relaunch a server whose status RPC merely timed out; calls: $(cat "$dir/calls")"
+  pass "fm_backend_herdr_server_ensure: a bound-killed status RPC fails fast instead of relaunching and polling an unresponsive server"
+}
+
 # --- client selection: a stale client shadowing a compatible one -------------
 #
 # Two herdr clients on PATH is a real host shape (a self-updated ~/.local/bin
@@ -5783,6 +5806,7 @@ test_cli_helper_sets_env_and_appends_trailing_session_flag
 test_cli_bounded_by_configurable_timeout
 test_cli_timeout_zero_disables_the_bound
 test_agent_state_unreadable_not_dead_on_wedged_rpc
+test_server_ensure_gives_up_when_status_rpc_is_wedged
 test_agent_state_bypasses_a_stale_client_shadowing_a_compatible_one
 test_recovery_grade_read_widens_only_at_its_own_boundary
 test_stale_registration_over_a_shell_only_pane_is_agent_free

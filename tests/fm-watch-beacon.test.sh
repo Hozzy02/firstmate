@@ -69,25 +69,26 @@ seed_herdr_window() {  # <state> <id> <window>
   fm_write_meta "$state/$id.meta" "window=$window" "backend=herdr" "kind=ship"
 }
 
-# test_beacon_advances_promptly_when_herdr_capture_hangs: three herdr-backed
-# windows whose backend hangs on every control-socket call (the wedged-server
-# shape a shared herdr process can hit under host load). Without the RPC bound
-# in bin/backends/herdr.sh and the per-window beat in bin/fm-watch.sh, three
-# hanging captures in one stale-pane sweep would each block the whole cycle far
-# past the poll interval with the beacon frozen at its top-of-loop touch.
+# test_beacon_advances_promptly_when_herdr_capture_hangs: four herdr-backed
+# windows whose backend hangs on every pane read (the wedged-server shape a
+# shared herdr process can hit under host load). FM_POLL is long enough that
+# the observation window sees only ONE top-of-cycle beat, so every further
+# distinct beacon mtime must come from a beat inside that single cycle's
+# stale-pane sweep - even though each bound-killed capture fails. Without the
+# RPC bound in bin/backends/herdr.sh and the per-window beat (taken whether or
+# not the capture succeeded) in bin/fm-watch.sh, the beacon stays frozen at its
+# top-of-loop touch for the whole sweep.
 test_beacon_advances_promptly_when_herdr_capture_hangs() {
   local dir state fakebin out pid start elapsed n
   dir=$(make_case beacon-herdr-capture-hangs); state="$dir/state"; fakebin="$dir/fakebin"
   seed_herdr_window "$state" tsk1 "sess:w1:p1"
   seed_herdr_window "$state" tsk2 "sess:w1:p2"
   seed_herdr_window "$state" tsk3 "sess:w1:p3"
-  # The session's server answers `status` immediately (it is genuinely
-  # running - the exact incident shape: one shared herdr server process stays
-  # up for days), so fm_backend_herdr_server_ensure's own retry loop (a
-  # separate, unbounded-as-a-whole concern this task does not touch) is never
-  # entered. Every OTHER call - the pane reads the stale-pane capture actually
-  # needs - hangs far past the RPC bound, reproducing a wedged socket for the
-  # calls report.md identifies.
+  seed_herdr_window "$state" tsk4 "sess:w1:p4"
+  # The session's server answers `status` immediately (the incident shape: one
+  # shared herdr server process stays up for days); every OTHER call - the
+  # pane reads the stale-pane capture actually needs - hangs far past the RPC
+  # bound, reproducing a wedged socket for the calls report.md identifies.
   cat > "$fakebin/herdr" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = status ]; then
@@ -99,17 +100,17 @@ SH
   chmod +x "$fakebin/herdr"
   out="$dir/out"
   start=$(date +%s)
-  watch_bg "$state" "$fakebin" "$out" FM_CHECK_INTERVAL=999999 FM_BACKEND_HERDR_CLI_TIMEOUT=1
+  watch_bg "$state" "$fakebin" "$out" FM_POLL=60 FM_CHECK_INTERVAL=999999 FM_BACKEND_HERDR_CLI_TIMEOUT=1
   pid=$!
-  n=$(count_beat_advances "$state" "$pid" 300)
+  n=$(count_beat_advances "$state" "$pid" 150)
   elapsed=$(( $(date +%s) - start ))
   reap "$pid"
   [ "$n" -ge 3 ] \
-    || fail "expected at least 3 distinct beacon advances (one per hanging herdr window) within ${elapsed}s, got $n"
+    || fail "expected at least 3 distinct beacon advances inside one cycle's sweep of 4 hanging herdr windows within ${elapsed}s, got $n"
   [ "$elapsed" -lt 60 ] \
-    || fail "beacon advances against 3 hanging herdr windows took ${elapsed}s; the RPC bound and per-window beat are not cutting the sweep short (report.md's pre-fix stalls ran 300-500s)"
+    || fail "beacon advances against 4 hanging herdr windows took ${elapsed}s; the RPC bound and per-window beat are not cutting the sweep short (report.md's pre-fix stalls ran 300-500s)"
   [ -s "$out" ] && fail "a hanging herdr backend alone must not produce a wake, got: $(cat "$out")"
-  pass "beacon advances at least once per hanging herdr window (RPC bound + per-window beat), $n advances in ${elapsed}s"
+  pass "beacon advances inside a single cycle across failed herdr captures (RPC bound + per-window beat), $n advances in ${elapsed}s"
 }
 
 # One custom watcher check in <state> that sleeps for <sleep-secs> and then

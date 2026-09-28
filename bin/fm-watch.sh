@@ -2992,12 +2992,14 @@ EOF
     if [ "$kind" = secondmate ] && ! status_is_paused_or_captain_held "$last"; then
       continue
     fi
-    tail40=$(fm_backend_capture "$(window_backend "$w")" "$w" 40 "$(window_label "$w")" 2>/dev/null) || continue
+    capture_rc=0
+    tail40=$(fm_backend_capture "$(window_backend "$w")" "$w" 40 "$(window_label "$w")" 2>/dev/null) || capture_rc=$?
     # Proven-progress beat: this capture can itself run up to the backend's
     # own RPC bound, and this loop runs once per recorded window, so the
     # accumulation across many windows is not otherwise beaconed until the
-    # next cycle.
+    # next cycle. A bounded capture that failed is still progress.
     watcher_beat
+    [ "$capture_rc" -eq 0 ] || continue
     h=$(printf '%s' "$tail40" | hash_pane)
     hf="$STATE/.hash-$key"
     cf="$STATE/.count-$key"
