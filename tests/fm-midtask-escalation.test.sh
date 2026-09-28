@@ -315,7 +315,7 @@ test_arm_uses_a_distinct_check_id_and_disarm_removes_everything() {
   assert_present "$trust" "arm registers a trust binding for the shim"
   assert_absent "$home/state/demo.check.sh" "the registered id is never the bare task id (that path is the PR-poll shim's own)"
   local mode
-  mode=$(stat -f '%Lp' "$shim" 2>/dev/null || stat -c '%a' "$shim" 2>/dev/null)
+  mode=$(stat -c '%a' "$shim" 2>/dev/null || stat -f '%Lp' "$shim" 2>/dev/null)
   assert_equals 700 "$mode" "the shim is written mode 700"
   assert_contains "$(cat "$shim")" "check demo" "the shim's action targets the real task id"
 
