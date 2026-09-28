@@ -575,10 +575,14 @@ print_status_tail() {
 # surprise in one task's read into that task's own endpoint line - never a
 # silently missing rest of digest. The inner bash re-sources fm-backend.sh
 # per read; that cost is a few milliseconds per task and buys the isolation.
+# This bound is the read's only one: the herdr adapter's per-RPC bound
+# (FM_BACKEND_HERDR_CLI_TIMEOUT) is disabled inside it, because that nested
+# bound runs the herdr CLI in its own process group, which this bound's group
+# kill cannot reach, leaving a hung CLI behind after the read is reported.
 fm_session_start_endpoint_read() {  # <backend> <target> [expected-label]
   local backend=$1 target=$2 label=${3:-}
   # shellcheck disable=SC2016  # Positional parameters expand inside the child bash, not here.
-  fm_run_timed "$ENDPOINT_TIMEOUT" bash -c '
+  fm_run_timed "$ENDPOINT_TIMEOUT" env FM_BACKEND_HERDR_CLI_TIMEOUT=0 bash -c '
     . "$1"
     fm_backend_target_exists "$2" "$3" "$4"
   ' _ "$SCRIPT_DIR/fm-backend.sh" "$backend" "$target" "$label"
