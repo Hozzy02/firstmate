@@ -525,6 +525,7 @@ When the selected named server is not running, the adapter launches it without t
 
 Herdr passes its server startup environment to every later pane, so retaining those values could misroute panes for another Firstmate home or harness.
 An already-running server is reused without restart or environment changes.
+Each control RPC is bounded by `FM_BACKEND_HERDR_CLI_TIMEOUT` ([configuration](configuration.md#environment-variables)); a status read that hits that bound fails the call at once as an unresponsive server rather than triggering a relaunch and re-poll.
 Explicit named-session routing and unrelated launch environment remain intact.
 
 ### Sending text and keys
