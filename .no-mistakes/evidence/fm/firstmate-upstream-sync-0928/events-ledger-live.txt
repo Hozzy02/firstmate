@@ -1,0 +1,14 @@
+## 1. worker status append (no config/fleet-ledger flag)
+exit=0
+events.ndjson:
+{"v":1,"id":"756e676726121bfab1afe46f7da454fbca234afe1c3abe249ffd167487f905e4","event":"task.status","task":"labtask","ts":1790620540,"time_source":"status","state":"working","key":null,"line":"working [at=1790620540]: probing events projection"}
+fleet ledger files:
+(none - opt-in respected)
+## 2. adversarial: retried appended call must not duplicate
+line count:        1
+## 3. adversarial: partial final line waits for newline
+line count after partial:        1
+line count after newline+capture:        2
+{"v":1,"id":"e6a65f757e2638a5d6594cf987032e2f977381567835e3f8db68e49aea57435d","event":"task.status","task":"labtask","ts":1790620540,"time_source":"status","state":"done","key":null,"line":"done [at=1790620540]: partial line finished"}
+## 4. adversarial: relative path is refused
+exit=2

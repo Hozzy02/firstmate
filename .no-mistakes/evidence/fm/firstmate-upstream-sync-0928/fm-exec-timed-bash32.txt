@@ -1,0 +1,10 @@
+/bin/bash: 3.2.57(1)-release
+## fast command in subshell under set -u
+hello-from-timed
+exit=0
+## timeout fires on slow command
+exit=124
+elapsed=2s
+## base 921e3f78 lib for contrast
+hello-from-timed
+exit=0
