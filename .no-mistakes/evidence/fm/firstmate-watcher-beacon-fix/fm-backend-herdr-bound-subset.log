@@ -1,0 +1,6 @@
+ok - fm_backend_herdr_cli: a wedged herdr RPC is killed at the configurable FM_BACKEND_HERDR_CLI_TIMEOUT bound instead of hanging the caller
+ok - fm_backend_herdr_cli: FM_BACKEND_HERDR_CLI_TIMEOUT=0 disables the bound (a non-positive bound is not a bound)
+ok - fm_backend_herdr_agent_state: a wedged (bound-killed) RPC reads unreadable, never dead - never grounds for eviction
+ok - fm_backend_herdr_server_ensure: a bound-killed status RPC fails fast instead of relaunching and polling an unresponsive server
+subset-done
+bash tests/.subset-run.sh  0.15s user 0.17s system 4% cpu 6.893 total

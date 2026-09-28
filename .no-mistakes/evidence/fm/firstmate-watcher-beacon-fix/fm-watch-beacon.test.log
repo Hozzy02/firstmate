@@ -1,0 +1,4 @@
+ok - beacon advances inside a single cycle across failed herdr captures (RPC bound + per-window beat), 5 advances in 24s
+ok - beacon advances at least once per check inside the sweep, 11 advances in 24s
+fm-watch-beacon tests passed
+bash tests/fm-watch-beacon.test.sh  3.99s user 6.79s system 21% cpu 49.452 total

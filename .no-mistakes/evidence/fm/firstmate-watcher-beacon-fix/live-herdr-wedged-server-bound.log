@@ -1,0 +1,24 @@
+== healthy lab server fm-lab-wedge-71128-29218 (pid 81007 state: S   )
+fm_backend_herdr_cli status --json:
+{"server_running":true}
+  -> rc=0 elapsed=.05s
+fm_backend_herdr_server_ensure:
+  -> rc=0 elapsed=.03s
+== WEDGED lab server via SIGSTOP (state: T   ); FM_BACKEND_HERDR_CLI_TIMEOUT=3
+fm_backend_herdr_cli status --json (bounded):
+  -> rc=124 elapsed=3.35s
+fm_backend_herdr_cli pane list (bounded):
+  -> rc=124 elapsed=3.33s
+fm_backend_herdr_server_ensure (must fail fast, not relaunch+poll):
+error: herdr server for session 'fm-lab-wedge-71128-29218' did not answer status within 3s
+  -> rc=1 elapsed=3.37s
+herdr server processes for lab session after ensure (expect only the one frozen pid):
+81007 T    herdr server --session fm-lab-wedge-71128-29218
+== ADVERSARIAL baseline: FM_BACKEND_HERDR_CLI_TIMEOUT=0 disables the bound; outer perl alarm 12s
+/var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T//drive.XXXX.sh: line 5:  4169 Alarm clock: 14         "$@"
+  -> rc=142 elapsed=12.08s
+{"client":{"version":"0.9.1","channel":"stable","protocol":22,"endpoint_protocol_generation":1,"endpoint_capabilities":["surface_interest","presentation_effects_fence","health_check"],"remote_host_bridge":true,"remote_bridge_idle_timeout":true,"binary":"/opt/homebrew/bin/herdr","session":"fm-lab-wedge-71128-29218"},"server":{"status":"running","running":true,"version":"0.9.1","protocol":22,"capabilities":{"live_handoff":true,"detached_server_daemon":false,"endpoint_protocol_generation":1,"surface_interest":true,"health_check":true},"compatible":true,"endpoint_compatible":true,"socket":"/Users/randalwade/.config/herdr/sessions/fm-lab-wedge-71128-29218/herdr.sock","session":"fm-lab-wedge-71128-29218","restart_needed":false,"server_binary_stale":false},"update":{"restart_needed":false,"server_binary_stale":false}}
+== resumed lab server (state: S   )
+fm_backend_herdr_cli status --json after resume:
+{"server_running":true}
+  -> rc=0 elapsed=.05s

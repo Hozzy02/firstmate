@@ -1,0 +1,11 @@
+== [HEAD 302d5b59 (fix)] lab server pid 81007 state=T  FM_POLL=120 FM_BACKEND_HERDR_CLI_TIMEOUT=5  4 distinct herdr task windows fm-lab-wedge-71128-29218:w{1..4}:p1
+  t+1.0s beacon touched (advance #1)
+  t+8.3s beacon touched (advance #2)
+  t+13.8s beacon touched (advance #3)
+  t+19.2s beacon touched (advance #4)
+  t+24.7s beacon touched (advance #5)
+  RESULT [HEAD 302d5b59 (fix)]: 5 distinct beacon touches in a ~45s observation of one watcher cycle (FM_POLL=120); beacon age at end 47s; hung herdr children: 0
+== [BASE d6c999c2 (pre-fix)] lab server pid 81007 state=T  FM_POLL=120 FM_BACKEND_HERDR_CLI_TIMEOUT=5  4 distinct herdr task windows fm-lab-wedge-71128-29218:w{1..4}:p1
+  t+0.7s beacon touched (advance #1)
+  RESULT [BASE d6c999c2 (pre-fix)]: 1 distinct beacon touches in a ~45s observation of one watcher cycle (FM_POLL=120); beacon age at end 86s; hung herdr children: 1
+== lab server resumed (state=S)
