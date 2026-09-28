@@ -3767,8 +3767,7 @@ remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
 # Capture the final status lines before retiring the log.
 FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-events.sh" appended "$STATE/$ID.status" || true
-# Opt-in fleet activity ledger (docs/fleet-ledger.md), before the status log is
-# retired so its last lines are captured; off costs one file test.
+# The separate fleet activity ledger is opt-in (docs/fleet-ledger.md).
 [ ! -e "$CONFIG/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" cleaned_up "$ID" || true
 status_retire_presentation_task "$STATE" "$ID" || exit 1
 fm_wake_queue_prune_task "$STATE" "$ID" "$T" 2>/dev/null || true
