@@ -82,6 +82,7 @@ It re-arms by parking that awaited hook on `bin/fm-watch-arm.sh` and returning a
 ### Claude Stop hook
 
 Claude's `.claude/settings.json` Stop `asyncRewake` hook (`bin/fm-claude-stop-autoarm.sh`) owns routine tokenless re-arm.
+Do not run the hook as a manual arm from a tool turn: a short-lived tool process cannot own its park; its header and help own the invocation contract.
 The hook fires on every Stop.
 On each Stop, an eligible primary with supervision need admits one home-scoped owner, which foregrounds `bin/fm-watch-arm.sh` inside the hook-owned process tree.
 While supervision is still needed and away mode remains inactive, an actionable close wakes the idle session through exit 2.
@@ -206,6 +207,7 @@ In its `--claude` mode it cooperates with the auto-arm.
 
 A recovery episode is one generation of the `state/.watcher-down` marker.
 It is retired only by the generation-bound acknowledgement the drain prints as `WAKE_ACK_REQUIRED`.
+The away return brief treats a still-open handling episode as a wake in progress, not watcher downtime; an open downtime episode remains a gap.
 
 ### Announcement
 

@@ -26,10 +26,10 @@ Today it runs beside a Claude, Cursor, OpenCode, omp, Grok, or Codex primary: aw
 
 ### Behavior by posture and harness
 
-- Attended (no away-posture record `state/.afk-contract`) on Claude and Cursor, the engine takes the wakes the Pi branch would take and never wakes main for a routine outcome; see [Postures](#postures).
+- Attended (no away record: no `state/.afk-contract`, or quiet mode's) on Claude and Cursor, the engine takes the wakes the Pi branch would take and never wakes main for a routine outcome; see [Postures](#postures).
   Every other close reaches main exactly as the plain watcher arm delivers it.
 - Attended on OpenCode, omp, Grok, and Codex, the host is a pass-through: every close reaches main as without the host.
-- Away (the record exists), the host hands each close to the engine.
+- Away (an away record exists), the host hands each close to the engine.
   Main stays parked unless the host hands the wake back.
 - `/afk` launches no away daemon on an opted-in home of those harnesses, because the host is the away session there.
 - `/quiet` enters nothing where the attended host runs, and elsewhere launches the daemon; see [Quiet mode](#quiet-mode).
@@ -100,7 +100,8 @@ So every guarded script treats it exactly as it treats the Pi branch.
 
 ## Postures
 
-The posture is the away-posture record, read at every close and again when a turn starts, exactly as the Pi branch reads it.
+The host reads the record's mode at every close and again when a turn starts (`bin/fm-afk-contract.sh` "AWAY OR QUIET").
+Only an away record is away: no record, or the record daemon-backed quiet mode writes, is a present captain, so the host runs attended beside a quiet record whose daemon is not running.
 
 ### Attended
 
@@ -133,7 +134,7 @@ A captain who leaves while an attended turn runs turns its captain outcomes into
 ### Quiet mode
 
 `/quiet` asks for what the attended host already does: routine wakes stay off a present captain's main.
-So where the attended host runs, `/quiet` is a statement that enters nothing, because a quiet entry's record would park the present captain's main; while [the broken-session latch](#the-broken-session-latch) holds, it says the session is paused instead.
+So where the attended host runs, `/quiet` is a statement that enters nothing, because the host already gives what a quiet entry would; while [the broken-session latch](#the-broken-session-latch) holds, it says the session is paused instead.
 Where the home opted in but the attended host lacks one of its parts, `/quiet` names the missing part and enters the quiet daemon, and while an away record is live the captain's return comes first.
 `bin/fm-afk-launch.sh` owns the readiness test and refusals in its `quiet-check` contract, and the [quiet skill](../.agents/skills/quiet/SKILL.md) owns the procedure.
 
@@ -208,6 +209,7 @@ The drain's header owns the section's bounds; these rules keep it bounded and in
 
 The section runs only for main on an opted-in home whose primary is not Pi, and never while the away record exists.
 The drain is the only presenter of these outcomes and the only owner of their read cursor, the away window's included: the return brief counts the window's outcomes and points at the section instead of listing them.
+On a Claude Code primary the Calm mod separately shows bounded, display-only supervision notes to the captain ([`calm.md`](calm.md#supervision-notes-on-claude-code)); it moves no outcome marker and adds nothing to main's context.
 A long away window no longer requires a drain per outcome: each task's captain outcomes collapse to one line, subject to the captain byte cap, and visible routine notes past the section's limit collapse into a count; after main acknowledges all captain outcomes no later drain shows anything from the window again.
 A drain that cannot read or project the store (jq missing included), print the section, or advance its read cursor says so and marks nothing it has not shown as read, and it exits nonzero, so the return keeps its catch-up gated until a check drains again and records the presentation, rather than clearing over outcomes a later drain would present again.
 The section's budgets count bytes in any locale, so a multibyte summary is cut on a whole UTF-8 character boundary to fit them.
@@ -249,6 +251,9 @@ The host copies the Pi branch's broken-session policy ([pi-supervision-branch.md
 Two consecutive engine errors latch the session: every wake reaches main for a five-minute cooldown, the attended close unchanged and the away close with a `supervision-host:` line, after which one wake probes the engine, and each probe that ends in another engine error doubles the cooldown up to one hour.
 A turn that records a report without an engine error clears the latch; a turn with a complete engine result but no report neither counts toward it nor clears it, while an engine error counts even if no report was recorded.
 The first trip adds one `supervision-host:` line to the failing turn's handback; a recovery is only recorded in the host ledger, so a routine probe stays off main.
+The away return brief (`bin/fm-afk-return.sh`) reports engine errors in the window and any latch visible at return, using a lower bound for the window's error count because the host ledger is bounded.
+It names the trip time only when the ledger retains the initial-trip row: a failed-probe row cannot establish that time or prove the latch predated the window, and a paused latch with no initial-trip row is reported with "trip time unavailable" even if the ledger is missing.
+The brief also says whether the latch is still paused or has recovered.
 The latch belongs to one main session, engine, and model, so a new main session or another engine or model starts clean.
 
 ### Lost ownership

@@ -168,6 +168,11 @@ fm_supervision_host_health_key() {
   printf '%s|%s|%s\n' "$key" "$FM_SUPERVISION_ENGINE" "$FM_SUPERVISION_ENGINE_MODEL"
 }
 
+# The latch's first cooldown in seconds: the host's initial trip sets it, and
+# each failed probe after that doubles it.
+# shellcheck disable=SC2034 # Shared with the sourcing host and return brief.
+FM_SUPERVISION_HOST_COOLDOWN=300
+
 # fm_supervision_host_paused_until <state-dir>: while that latch holds, from
 # the trip until a probe succeeds, print the epoch from which the next wake
 # probes the engine (every wake before it reaches main) and succeed; otherwise
