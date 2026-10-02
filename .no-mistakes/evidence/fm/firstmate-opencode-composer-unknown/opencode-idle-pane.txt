@@ -1,0 +1,39 @@
+
+  ┃
+  ┃  say only ok
+  ┃
+
+  ┃
+  ┃  this model is not included in your free usage, add usage credits to pay as you go: https://ollama.com/settings
+  ┃  or upgrade for included usage: https://ollama.com/upgrade (ref: 2443972a-a006-48ea-9dcf-5fbb2218bc3d)
+  ┃
+
+     ▣  Build · GLM-5.2
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · GLM-5.2 Ollama Cloud · max
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /private/tmp/opc-proj                                                                  tab agents  ctrl+p commands
