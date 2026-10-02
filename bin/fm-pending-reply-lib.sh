@@ -1445,6 +1445,24 @@ fm_pending_reply_tick_one() {  # <state-dir> <corr_id> <busy_state> [secondmate-
   return 0
 }
 
+# True when a record is resolved and has no escalation left to close, so a tick
+# has nothing to do for it. Records are retained forever, so a long-lived home
+# accumulates hundreds of these and the watcher walks them every poll: this
+# reads the record in-shell, with no lock and no subprocess, because the locked
+# close path's per-record cost summed past the watcher's beacon grace.
+fm_pending_reply_settled() {  # <record-path>
+  local rec=$1 line phase='' escalated='' closed=''
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      phase=*) phase=${line#phase=} ;;
+      escalated_epoch=*) escalated=${line#escalated_epoch=} ;;
+      escalation_closed_epoch=*) closed=${line#escalation_closed_epoch=} ;;
+    esac
+  done 2>/dev/null < "$rec" || return 1
+  [ "$phase" = resolved ] || return 1
+  [ -z "$escalated" ] || [ -n "$closed" ]
+}
+
 # Scan every pending record for this parent state. Safe to call every poll.
 # Never scrapes secondmate conversation; uses only parent status, backend busy
 # state, and optional secondmate-home wrong-home path checks.
@@ -1459,12 +1477,13 @@ fm_pending_reply_tick() {  # <state-dir>
     case "$(basename "$rec")" in
       .*) continue ;;
     esac
+    ! fm_pending_reply_settled "$rec" || continue
     corr=$(fm_pending_reply_get "$rec" corr_id)
     [ -n "$corr" ] || corr=$(basename "$rec")
     task_id=$(fm_pending_reply_get "$rec" task_id)
     phase=$(fm_pending_reply_get "$rec" phase)
     if [ "$phase" = resolved ]; then
-      # Cheap no-op unless an escalation for this record is still open; this is
+      # Reached only while an escalation for this record is still open; this is
       # the retry that makes the close converge after a transient write failure.
       fm_pending_reply_close_escalation "$state" "$corr" || true
       continue
