@@ -153,18 +153,17 @@ test_beacon_advances_between_checks_in_the_sweep() {
 # Seed <count> pending-reply records in <state>, each delivered and then
 # resolved by its correlated parent report, through the production library.
 seed_resolved_pending_replies() {  # <home> <state> <count>
-  (
-    # shellcheck source=bin/fm-pending-reply-lib.sh
-    . "$ROOT/bin/fm-pending-reply-lib.sh"
-    home=$1 state=$2 count=$3 i=0
+  bash -c '
+    . "$1/bin/fm-pending-reply-lib.sh"
+    home=$2 state=$3 count=$4 i=0
     while [ "$i" -lt "$count" ]; do
       corr=$(fm_pending_reply_create "$home" "$state" mate "request $i") || exit 1
       fm_pending_reply_mark_delivered "$state" "$corr" || exit 1
-      printf 'done [corr=%s]: complete\n' "$corr" >> "$state/mate.status"
+      printf "done [corr=%s]: complete\n" "$corr" >> "$state/mate.status"
       fm_pending_reply_try_resolve "$state" "$corr" || exit 1
       i=$((i + 1))
     done
-  ) || fail "could not seed resolved pending-reply records"
+  ' _ "$ROOT" "$@" || fail "could not seed resolved pending-reply records"
 }
 
 # test_beacon_advances_with_many_resolved_pending_replies: pending-reply
