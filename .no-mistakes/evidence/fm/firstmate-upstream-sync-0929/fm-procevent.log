@@ -1,0 +1,78 @@
+ok - no configured source means no generated state and no process
+ok - one blocking completion yields exactly one bounded normalized event
+ok - a home reached through a symlinked ancestor runs its sources normally
+not-autohandled: direct-src (left for the handler; still unacknowledged)
+ok - public start owns the process group recorded by its claim
+ok - public start never claims an inherited caller process group
+ok - an unhandled result survives restart and repeat drains, and only explicit acknowledgement stops its re-announcement
+ok - publication cannot race a handled acknowledgement
+ok - handled acknowledgement creation is private and fails safely
+ok - automatic application waits for durable publication and failed publication remains recoverable
+ok - a self-announcing adapter applies quietly and still publishes what it could not apply
+not-autohandled: ends-src (left for the handler; still unacknowledged)
+ok - an adapter-classified terminal result is captured once, announced, and retires its source automatically
+not-autohandled: open-src (left for the handler; still unacknowledged)
+ok - a source stays armed unless its own adapter classifies the result terminal
+not-autohandled: replace-src (left for the handler; still unacknowledged)
+ok - terminal retirement preserves and releases a concurrently replaced registration
+ok - failed terminal retirement is fail-closed and idempotently recoverable
+ok - one Send & End yields exactly one captured result, automatic retirement, and no recurring poll
+ok - an empty board close is captured and recorded handled without ever waking the captain
+ok - worker board replies and recovered listeners derive their server from the board session
+ok - worker-owned Lavish rounds deliver to the worker, acknowledge on re-arm, and stop at session end
+ok - a capture interrupted before its result commit does not wedge its source
+ok - an orphaned capture is not acknowledged by a worker it never reached
+ok - a worker-owned board is only armed for an owner its feedback can reach
+ok - an acknowledged note is never resurrected and stops ringing across repeated reconciles
+ok - acknowledging a terminal round concludes that round only
+ok - an interrupted conclude leaves the ended board unpollable and finishes on retry
+ok - a re-arm that cannot acknowledge its round leaves the running generation alone
+ok - a worker-owned board is armed once and re-armed only to acknowledge an open round
+ok - a board close carrying the captain's real answer is still announced
+ok - the shipped poll governor bounds an instantly returning source
+ok - a transient Lavish poll interruption is retried quietly and never announced
+ok - a staged worker reply is handed to the board once across quiet poll retries
+ok - a listener whose staged reply is gone polls the board without one
+ok - a listener that refuses its own setup leaves the staged reply for the next one
+ok - a listener whose artifact vanished leaves the staged reply for the next one
+ok - an interruption that outlives the bounded retries is captured and announced
+ok - only the exact interruption is retried; an unrelated SERVER_ERROR still surfaces
+ok - only the literal two-line interruption enters the quiet retry policy
+ok - arm rejects malformed and out-of-range retry delays before registration
+ok - poll cleanup safely handles an apostrophe-containing TMPDIR
+ok - Lavish classification staging stays bounded while nonmatches stream
+ok - a drained-but-unhandled result survives a replacement session and is retired only by explicit handling, never twice
+ok - pending results preserve numeric order and distinct wake identity
+ok - one owner per canonical source across homes
+ok - retiring a never-completing source stops its runner and its blocked child
+ok - reconcile reaps a runner whose source registration is gone
+not-autohandled: stale-src (left for the handler; still unacknowledged)
+ok - stale-owner recovery removes abandoned output without displacing a live owner
+not-autohandled: cross-home-src (left for the handler; still unacknowledged)
+ok - cross-home stale recovery removes abandoned output from the old state directory
+not ok - no contender acquired the stale claim
+/Users/randalwade/.no-mistakes/worktrees/3a2378ca6c3e/01M3YV1TP9J2BMXQBHZXR3GTPC/bin/fm-procevent.sh: line 1087: 72983 Terminated: 15          "${ARGV[@]}" 1>&5 5>&- 4>&- 2> /dev/null
+/Users/randalwade/.no-mistakes/worktrees/3a2378ca6c3e/01M3YV1TP9J2BMXQBHZXR3GTPC/bin/fm-procevent.sh: line 1087: 73180 Terminated: 15          perl -e '
+      use strict;
+      use warnings;
+      my $limit = shift;
+      my ($written, $truncated) = (0, 0);
+      while (1) {
+        my $count = sysread(STDIN, my $buffer, 65536);
+        exit 2 unless defined $count;
+        last if $count == 0;
+        my $take = $written < $limit ? $limit - $written : 0;
+        $take = $count if $take > $count;
+        if ($take > 0) {
+          my $offset = 0;
+          while ($offset < $take) {
+            my $count_written = syswrite(STDOUT, $buffer, $take - $offset, $offset);
+            exit 2 unless defined $count_written;
+            $offset += $count_written;
+          }
+          $written += $take;
+        }
+        $truncated = 1 if $take < $count;
+      }
+      exit($truncated ? 3 : 0);
+    ' "$MAX_OUTPUT_BYTES" 0<&4 > "$out"

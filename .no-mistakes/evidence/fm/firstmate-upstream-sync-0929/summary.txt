@@ -1,0 +1,8 @@
+fm-send-inbox exit=0
+fm-live-lab exit=1
+fm-supervision-host exit=1
+fm-watch-arm exit=0
+fm-procevent exit=1
+fm-live-lab exit=0
+fm-pr-merge exit=0
+fm-procevent exit=1

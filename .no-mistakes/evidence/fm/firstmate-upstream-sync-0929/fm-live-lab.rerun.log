@@ -1,0 +1,33 @@
+ok - a ready Claude lab passes every readiness check
+ok - primary fails when session start never took the lab lock
+ok - primary fails when the primary runs in a linked worktree instead of the lab's primary checkout
+ok - probe fails when the primary never answered its nonce
+ok - trust fails when the lab home has no registered Claude trust
+ok - mirror fails when the feed is unwired or has not recorded a whole turn
+ok - host passes and fails according to --expect-host
+ok - watcher fails on a stale beacon
+ok - mate fails when its window is gone or it never reached its charter
+ok - mate off readiness requires inherited material and a disabled home gate
+ok - worker readiness follows current crew state and the recorded accessible gate
+ok - treehouse fails when a pool lands in ~/.treehouse
+ok - extensions fail when the Pi lab lacks the branch extension or loads a stale build
+ok - down refuses anything up did not build
+ok - down stops only recorded lab processes, removes trust entries and task temp dirs
+ok - check and down use the recorded Claude store and keep a symlinked store linked
+tests/fm-live-lab.test.sh: line 424:  6614 Killed: 9               perl -e 'setpgrp(0,0); exec @ARGV' "$@" > /dev/null 2>&1
+ok - down waits for TERM handlers and escalates before removing trust
+ok - down waits for captured descendants after their root exits
+ok - down tracks descendants spawned during TERM
+ok - down ignores roots with mismatched start times
+tests/fm-live-lab.test.sh: line 531: 57486 Killed: 9               perl -e 'setpgrp(0,0); exec @ARGV' "$@" > /dev/null 2>&1
+tests/fm-live-lab.test.sh: line 531: 57487 Killed: 9               perl -e 'setpgrp(0,0); exec @ARGV' "$@" > /dev/null 2>&1
+ok - down drops empty groups permanently before their ids can be reused
+ok - down revalidates process identity during its bounded wait
+ok - trust fails on Pi when the lab wrote the persistent Pi trust store
+ok - down removes the lab but reports, without reverting, a written Pi trust store
+ok - up refuses an existing root and an unsupported harness
+ok - up gives both task IDs a long nonce and down cleans partial setup
+ok - up launches primary after worker status without weakening final parked readiness
+ok - up fails immediately when a spawned worker has no pane PID
+ok - up re-registers primary trust after a concurrent Claude write
+ok - fm-claude-trust.sh --lab-home trusts only a marked lab primary checkout
