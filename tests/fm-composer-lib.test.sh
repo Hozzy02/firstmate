@@ -706,7 +706,7 @@ test_matrix_opencode_leftbar_signals() {
 }
 
 # task firstmate-opencode-composer-unknown: a real idle opencode 1.18.32 pane,
-# captured through Herdr (tests/fixtures/fm-composer-opencode-sidebar/pane-w6P-p2.txt),
+# captured through Herdr (tests/fixtures/fm-composer-opencode-sidebar/pane-w6P-p2.pane),
 # used to read `unknown` instead of `empty` even though its composer was
 # visibly empty. Two independent defects combined:
 #   1. opencode draws its open project's cwd and git branch right-aligned
@@ -723,8 +723,8 @@ test_matrix_opencode_leftbar_signals() {
 # still read pending/unknown.
 test_matrix_opencode_leftbar_sidebar_furniture() {
   local idle typed
-  idle=$(cat "$ROOT/tests/fixtures/fm-composer-opencode-sidebar/pane-w6P-p2.txt")
-  typed=$(cat "$ROOT/tests/fixtures/fm-composer-opencode-sidebar/pane-w6P-p2-typed.txt")
+  idle=$(cat "$ROOT/tests/fixtures/fm-composer-opencode-sidebar/pane-w6P-p2.pane")
+  typed=$(cat "$ROOT/tests/fixtures/fm-composer-opencode-sidebar/pane-w6P-p2-typed.pane")
   assert_screen "real idle opencode 1.18.32 pane with right-aligned cwd/branch/status furniture on herdr" \
     empty "$CAPS_STYLED" "$idle"
   assert_screen "same pane on a plain (unstyled) capture" \
