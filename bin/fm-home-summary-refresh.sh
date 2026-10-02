@@ -217,7 +217,10 @@ fi
 
 if [ "$HOME_SUMMARY_MODE" = parent ]; then
   attempt_stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || attempt_stamp=
+  # The herdr adapter's per-RPC bound is disabled here: that nested bound runs
+  # the herdr CLI in its own process group, which this bound's kill cannot reach.
   if fm_run_timed "$HOME_SUMMARY_TIMEOUT" env \
+    FM_BACKEND_HERDR_CLI_TIMEOUT=0 \
     FM_HOME_SUMMARY_WORKER_BEST_EFFORT="$BEST_EFFORT" \
     FM_HOME_SUMMARY_IF_IDLE="$HOME_SUMMARY_IF_IDLE" \
     "$SCRIPT_DIR/fm-home-summary-refresh.sh" --_worker; then
