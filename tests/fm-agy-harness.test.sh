@@ -394,6 +394,22 @@ test_agy_trust_registers_the_logical_and_resolved_worktree_paths() {
   pass "fm-agy-trust.sh: registers the logical and resolved worktree paths and preserves the store"
 }
 
+test_agy_trust_accepts_a_project_path_differing_only_by_letter_case() {
+  local rec store out proj_alt
+  rec=$(make_agy_trust_case casefold)
+  read_agy_trust_case "$rec"
+  proj_alt="$(dirname "$CASE_DIR")/TRUST-CASEFOLD${PROJ_DIR#"$CASE_DIR"}"
+  if [ ! -d "$proj_alt" ]; then
+    pass "fm-agy-trust.sh: case-differing project path (skipped: case-sensitive filesystem)"
+    return 0
+  fi
+  store="$HOME_DIR/.gemini/antigravity-cli/settings.json"
+  out=$(run_agy_trust "$HOME_DIR" "$WT_DIR" "$proj_alt") \
+    || fail "a project path differing only by letter case must be accepted: $out"
+  assert_agy_trusted "$store" "$WT_DIR" "the worktree was not registered"
+  pass "fm-agy-trust.sh: accepts a project path differing only by letter case"
+}
+
 test_agy_trust_creates_a_missing_store() {
   local rec store out
   rec=$(make_agy_trust_case nostore)
@@ -907,6 +923,7 @@ test_agy_unreachable_listing_launches_unvalidated
 test_agy_hung_listing_is_cut_off_and_launches
 test_agy_zero_model_timeout_is_clamped_to_the_default_bound
 test_agy_trust_registers_the_logical_and_resolved_worktree_paths
+test_agy_trust_accepts_a_project_path_differing_only_by_letter_case
 test_agy_trust_creates_a_missing_store
 test_agy_trust_refuses_out_of_scope_paths
 test_agy_fresh_worktree_is_pre_trusted_and_launches_without_a_dialog
