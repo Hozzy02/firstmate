@@ -1,0 +1,13 @@
+ok - absent key is off: one stderr line, exit 0, no network call
+ok - TYPESAFE_API_KEY= in .env activates the tool; the environment wins over it
+ok - clear: one Noul question per catalog skill, key on the fd header only, floor-based selection
+ok - none: nothing clears the floor, decide as today
+ok - no installed skills: no model or network call
+ok - project-dir catalog is read, and a shared tree with the user catalog de-duplicates
+ok - project .claude/skills and enabled plugin skills (plugin:skill) join the catalog
+ok - a skill directory with no readable name or description is skipped
+ok - the catalog is de-duplicated by name, with the project copy winning
+ok - a folded description scalar reads only its first content line
+ok - selection caps at 5 skills, ranked by probability
+ok - error: HTTP failure and a malformed response return structured errors, never a blocked exit
+ok - usage errors exit 2 and are never selected around
