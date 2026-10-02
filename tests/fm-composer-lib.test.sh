@@ -705,6 +705,37 @@ test_matrix_opencode_leftbar_signals() {
   pass "matrix: opencode's left-bar composer reads empty everywhere and scans the full active run"
 }
 
+# task firstmate-opencode-composer-unknown: a real idle opencode 1.18.32 pane,
+# captured through Herdr (tests/fixtures/fm-composer-opencode-sidebar/pane-w6P-p2.txt),
+# used to read `unknown` instead of `empty` even though its composer was
+# visibly empty. Two independent defects combined:
+#   1. opencode draws its open project's cwd and git branch right-aligned
+#      beside the SAME left-bar rows the composer occupies, wrapped across
+#      however many rows they need; the classifier read that furniture as
+#      typed content.
+#   2. opencode's own `ctrl+p commands` status bar, drawn directly below the
+#      left-bar envelope's floor row, has no agent-glyph proof to open the
+#      existing footer zone (opencode's prompt character is the shell glyph
+#      `>`), so it read as unclaimed activity and staled the whole envelope.
+# Both are fixed structurally - by SHAPE for the right-aligned furniture, by a
+# stable keybinding token for the status bar - never by trusting specific cwd,
+# branch, token, or cost text, so a typed draft in the same composer must
+# still read pending/unknown.
+test_matrix_opencode_leftbar_sidebar_furniture() {
+  local idle typed
+  idle=$(cat "$ROOT/tests/fixtures/fm-composer-opencode-sidebar/pane-w6P-p2.txt")
+  typed=$(cat "$ROOT/tests/fixtures/fm-composer-opencode-sidebar/pane-w6P-p2-typed.txt")
+  assert_screen "real idle opencode 1.18.32 pane with right-aligned cwd/branch/status furniture on herdr" \
+    empty "$CAPS_STYLED" "$idle"
+  assert_screen "same pane on a plain (unstyled) capture" \
+    empty "$CAPS_PLAIN" "$idle"
+  assert_screen "same pane with a typed line in the composer on herdr" \
+    pending "$CAPS_STYLED" "$typed"
+  assert_screen "same pane with a typed line in the composer on a plain capture" \
+    unknown "$CAPS_PLAIN" "$typed"
+  pass "matrix: opencode's right-aligned cwd/branch/status furniture reads empty; real typed text still defers"
+}
+
 test_matrix_grok_titled_bottom_border() {
   # Grok 1.0.5 widened its titled BOTTOM border three columns past the top and
   # content rows. This is the idle capture from issue #3436; Herdr has no
@@ -981,6 +1012,7 @@ test_matrix_codex_idle_starfield_furniture
 test_matrix_pi_separated_needs_identity
 test_matrix_pi_dollar_status_footer_is_empty
 test_matrix_opencode_leftbar_signals
+test_matrix_opencode_leftbar_sidebar_furniture
 test_matrix_grok_titled_bottom_border
 test_matrix_kimi_bordered_shell_glyph_box
 test_matrix_claude_inside_zellij_ansi_dump
