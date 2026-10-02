@@ -1,0 +1,4 @@
+/tmp/base-lib.sh idle: unknown
+/tmp/base-lib.sh typed: unknown
+bin/fm-composer-lib.sh idle: empty
+bin/fm-composer-lib.sh typed: unknown

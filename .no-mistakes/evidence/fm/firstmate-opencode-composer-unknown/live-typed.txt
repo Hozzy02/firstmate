@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                    ▄
+                                                   █▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█
+                                                   █  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀
+                                                   ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
+
+
+                                 ┃
+                                 ┃  hello draft text
+                                 ┃
+                                 ┃  Build · GLM-5.2 Ollama Cloud · max
+                                 ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                 tab agents  ctrl+p commands
+
+
+
+                                    ● Tip Press ctrl+g , home to jump to the beginning of the conversation
+
+
+
+
+
+
+
+
+
+  ~/.no-mistakes/worktrees/3a2378ca6c3e/01M3Z4YHYRBYF0SJCD7SKTPJXB                                                                 1.18.32
+
