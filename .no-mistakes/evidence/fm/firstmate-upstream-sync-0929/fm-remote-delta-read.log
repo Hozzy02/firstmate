@@ -1,0 +1,11 @@
+ok - an appended line produces a delta with exact offsets, hashes, and payload
+ok - an unchanged log costs one stat per poll and exits 75 at the window
+ok - the capture and hashing path runs exactly once a real change lands
+ok - a shrunk log breaks continuity as truncated with the remaining hash
+ok - a same-size in-place rewrite breaks continuity as prefix-changed
+ok - a same-second same-size rewrite of the same inode breaks continuity
+ok - a removed log breaks continuity as missing
+ok - a missing log at the origin cursor keeps waiting until the window closes
+ok - an unterminated tail is withheld until the newline completes it
+ok - the reader refuses traversal, symlinks, and oversized tail lines
+delta-read contract tests complete
