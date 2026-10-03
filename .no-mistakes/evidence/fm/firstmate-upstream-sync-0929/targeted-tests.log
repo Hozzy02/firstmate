@@ -1,0 +1,18 @@
+tests/fm-remote-delta-read.test.sh rc=0 13s
+ok - the reader refuses traversal, symlinks, and oversized tail lines
+delta-read contract tests complete
+tests/fm-ci-workflow.test.sh rc=0 11s
+ok - normal tier jobs share one 45 minute budget
+ok - Herdr keeps a 20 minute step tripwire under a 75 minute job backstop
+tests/fm-pr-merge.test.sh rc=0 458s
+ok - fm-pr-merge matches an app-bound required commit status by name
+ok - fm-pr-merge reports known missing checks and all independent read errors
+tests/fm-home-summary-refresh.test.sh rc=0 52s
+ok - failure records preserve refresh attempt ordering
+ok - repeated publication failure is reported at session start until it clears
+tests/fm-session-start.test.sh rc=0 588s
+ok - --reemit re-verifies lock ownership and keeps repair ownership with whoever holds it
+# fm-session-start.test.sh: all assertions passed
+tests/fm-lint.test.sh rc=0 236s
+ok - fm-lint.sh changed mode excludes cross-file codes that explicit paths still report
+ok - local exclusion list covers every no-external-sources ShellCheck code
