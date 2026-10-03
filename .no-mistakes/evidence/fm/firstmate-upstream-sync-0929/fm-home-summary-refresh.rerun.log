@@ -18,11 +18,8 @@ ok - valid publication ignores an unavailable failure record
 ok - publication completes on a home carrying accumulated status history
 ok - producer skips remote per-task state probes
 ok - a stalled publication does not delay the watcher liveness beacon
-not ok - the first restart watcher did not surface its actionable signal
-tests/lib.sh: line 179: 21156 Killed: 9               FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$RESTART_HOME" bash -c '
-  . "$1/bin/fm-wake-lib.sh"
-  fm_lock_acquire_wait "$2/state/.home-summary-refresh.lock"
-  : > "$3"
-  sleep 30
-' _ "$ROOT" "$RESTART_HOME" "$RESTART_LOCK_MARKER"
-tests/lib.sh: line 179: 21980 Killed: 9               PATH="$FAKEBIN:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$RESTART_HOME" FM_POLL=1 FM_HOME_SUMMARY_INTERVAL=999999 FM_HOME_SUMMARY_TIMEOUT=2 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=9999999 FM_HEARTBEAT=9999999 "$WATCH" > "$TMP_ROOT/restart-watch-one.out" 2> "$TMP_ROOT/restart-watch-one.err"
+ok - publication remains single-flight across watcher restart
+ok - bootstrap scopes retained failures to the current publication
+Terminated: 15
+ok - failure records preserve refresh attempt ordering
+ok - repeated publication failure is reported at session start until it clears

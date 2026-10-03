@@ -1,6 +1,5 @@
-fm-ci-workflow exit 0
-fm-remote-delta-read exit 0
-fm-home-summary-refresh exit 0
-fm-session-start exit 1
-fm-pr-merge exit 0
-rerun exit 0
+fm-ci-workflow rc=0
+fm-remote-delta-read rc=0
+fm-home-summary-refresh rc=1
+fm-session-start rc=0
+fm-pr-merge rc=0
