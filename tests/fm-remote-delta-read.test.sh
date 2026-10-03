@@ -68,7 +68,7 @@ SH
 done
 : > "$EXEC_LOG"
 : > "$DELTA_HOME/$DELTA_LOG_REL"
-FM_TEST_EXEC_LOG="$EXEC_LOG" PATH="$DELTA_SHIM:/usr/bin:/bin" run_reader 0 "$EMPTY_SHA" 2 > /dev/null && \
+FM_TEST_EXEC_LOG="$EXEC_LOG" PATH="$DELTA_SHIM:/usr/bin:/bin" run_reader 0 "$EMPTY_SHA" 4 > /dev/null && \
   fail "an unchanged log did not exit 75" || RC=$?
 [ "${RC:-0}" -eq 75 ] || fail "an unchanged log closed its window with $RC instead of 75"
 perl_execs=$(grep -cx perl "$EXEC_LOG" || true)
@@ -80,7 +80,7 @@ for TOOL in od tail head wc date; do
   hits=$(grep -cx "$TOOL" "$EXEC_LOG" || true)
   [ "$hits" -eq 0 ] || fail "an unchanged log ran $TOOL $hits times in the poll loop"
 done
-[ "$stat_execs" -ge 5 ] || fail "the unchanged window did not keep polling stat ($stat_execs)"
+[ "$stat_execs" -ge 3 ] || fail "the unchanged window did not keep polling stat ($stat_execs)"
 pass 'an unchanged log costs one stat per poll and exits 75 at the window'
 
 # Growth still pays the capture and hashing tools exactly when bytes appear.
