@@ -25,8 +25,12 @@
 #   enabled in $HOME/.claude/settings.json, named <plugin>:<skill>.
 #   Entries are de-duplicated by resolved directory, so a project whose
 #   .agents/skills and .claude/skills are the same tree as the user directory
-#   (as this repo's own .claude/skills symlink is) is counted once. A skill directory with no
-#   readable name or description is skipped rather than guessed.
+#   (as this repo's own .claude/skills symlink is) is counted once, and then
+#   by name: roots are read in the order above and the first copy of a name
+#   wins, so a project copy of a skill replaces a same-named user-level copy.
+#   A plugin skill's name includes its <plugin>: prefix, so it never collides
+#   with an unprefixed one. A skill directory with no readable name or
+#   description is skipped rather than guessed.
 #
 # What it does when on with a non-empty catalog: one POST to
 #   https://api.typesafe.ai/v1/systemone with the project name and the
@@ -180,7 +184,8 @@ fm_skill_frontmatter() {  # <SKILL.md path>
 
 CATALOG_ENTRIES=$(mktemp) || die "mktemp failed"
 SEEN_DIRS=$(mktemp) || { rm -f "$CATALOG_ENTRIES"; die "mktemp failed"; }
-trap 'rm -f "$CATALOG_ENTRIES" "$SEEN_DIRS"' EXIT
+SEEN_NAMES=$(mktemp) || { rm -f "$CATALOG_ENTRIES" "$SEEN_DIRS"; die "mktemp failed"; }
+trap 'rm -f "$CATALOG_ENTRIES" "$SEEN_DIRS" "$SEEN_NAMES"' EXIT
 
 collect_catalog_root() {  # <root dir holding one subdir per skill> [<name prefix>]
   local root=$1 prefix=${2:-} dir real name desc
@@ -192,9 +197,12 @@ collect_catalog_root() {  # <root dir holding one subdir per skill> [<name prefi
     grep -qxF "$real" "$SEEN_DIRS" 2>/dev/null && continue
     printf '%s\n' "$real" >> "$SEEN_DIRS"
     IFS=$'\t' read -r name desc < <(fm_skill_frontmatter "${dir}SKILL.md")
-    [ -n "$name" ] || name=$(basename "$dir")
-    [ -n "$desc" ] || continue
-    printf '%s%s\t%s\n' "$prefix" "$name" "$desc" >> "$CATALOG_ENTRIES"
+    [ -n "$name" ] && [ -n "$desc" ] || continue
+    name=$prefix$name
+    # Roots are collected project first, so the first copy of a name wins.
+    grep -qxF -- "$name" "$SEEN_NAMES" 2>/dev/null && continue
+    printf '%s\n' "$name" >> "$SEEN_NAMES"
+    printf '%s\t%s\n' "$name" "$desc" >> "$CATALOG_ENTRIES"
   done
 }
 enabled_plugin_roots() {  # prints <plugin>\t<installPath> per enabled installed plugin
@@ -226,7 +234,7 @@ CATALOG_COUNT=$(jq -r 'length' <<<"$CATALOG_JSON")
 
 RESP_FILE=$(mktemp) || die "mktemp failed"
 TASK_TEXT=$(mktemp) || { rm -f "$RESP_FILE"; die "mktemp failed"; }
-trap 'rm -f "$CATALOG_ENTRIES" "$SEEN_DIRS" "$RESP_FILE" "$TASK_TEXT"' EXIT
+trap 'rm -f "$CATALOG_ENTRIES" "$SEEN_DIRS" "$SEEN_NAMES" "$RESP_FILE" "$TASK_TEXT"' EXIT
 
 # Send Jev only the task-specific sections bin/fm-brief.sh scaffolds, the same
 # text bin/fm-dispatch-resolve.sh sends, so the model reads the same task
