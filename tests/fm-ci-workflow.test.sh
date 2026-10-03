@@ -173,8 +173,12 @@ test_fast_tier_shares_one_short_tripwire() {
   pass "fast tier jobs share one $fast minute tripwire"
 }
 
-# Normal tier: every test or lint lane shares ONE fixed 30-minute budget,
+# Normal tier: every test or lint lane shares ONE fixed 45-minute budget,
 # above the fast tier. That budget is a hang tripwire, not a packing estimate.
+# Raised from 30 to 45 because this fork's runners under load measure well
+# above upstream's packing hints (tests/fm-supervision-host.test.sh ran
+# 1670239 ms here against upstream's 789123 ms hint, and portable serial 2
+# was cancelled at exactly the old 30:00 bound on run 37073567974).
 test_normal_tier_shares_one_budget() {
   local fast normal
   # shellcheck disable=SC2086
@@ -183,8 +187,8 @@ test_normal_tier_shares_one_budget() {
   normal=$(tier_timeout normal $NORMAL_TIER_JOBS) || exit 1
   [ "$normal" -gt "$fast" ] \
     || fail "normal tier ($normal) must exceed the fast tier ($fast)"
-  [ "$normal" = 30 ] \
-    || fail "normal tier must be the single 30-minute shared budget, got $normal"
+  [ "$normal" = 45 ] \
+    || fail "normal tier must be the single 45-minute shared budget, got $normal"
   pass "normal tier jobs share one $normal minute budget"
 }
 
