@@ -1659,11 +1659,18 @@ for (const { name, actual } of rows) {
     throw new Error(`${name} was not hidden before export rendering`);
   }
 }
+// Pi 1.0.1 renamed the exporter's lookup dependency from getToolDefinition to
+// getToolRenderers; the resolved value is still the registered definition unless an
+// extension registers a tool renderer, which Calm does not. Supplying both names
+// drives the exporter Pi 1.0.0 and 1.0.1 each ship.
+function toolHtmlRendererLookup(lookup) {
+  return { getToolDefinition: lookup, getToolRenderers: lookup };
+}
 async function assertStockHtmlRendering(command, submitData) {
   editorText = command;
   terminalInputHandler(submitData);
   const htmlRenderer = createToolHtmlRenderer({
-    getToolDefinition: (name) => tools.find((tool) => tool.name === name),
+    ...toolHtmlRendererLookup((name) => tools.find((tool) => tool.name === name)),
     theme,
     cwd: process.cwd(),
   });
@@ -1694,7 +1701,7 @@ getKeybindings().setUserBindings({ "tui.input.submit": "alt+s" });
 editorText = "/export remapped.html";
 terminalInputHandler("\r");
 const unmatchedRenderer = createToolHtmlRenderer({
-  getToolDefinition: (name) => tools.find((tool) => tool.name === name),
+  ...toolHtmlRendererLookup((name) => tools.find((tool) => tool.name === name)),
   theme,
   cwd: process.cwd(),
 });
