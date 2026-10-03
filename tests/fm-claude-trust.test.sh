@@ -173,6 +173,31 @@ test_fresh_worktree_is_trusted() {
   pass "fm-claude-trust.sh: a fresh task worktree is trusted"
 }
 
+# A case-insensitive volume (macOS APFS) reaches one directory through any
+# letter case, and git answers in the spelling on disk, so a project recorded in
+# another case must still be recognized as the worktree's own repository and
+# registered under the on-disk spelling Claude Code itself resolves.
+test_case_differing_paths_are_trusted_under_their_on_disk_spelling() {
+  local rec out proj_alt wt_alt
+  rec=$(make_case casefold)
+  read_case "$rec"
+  proj_alt="$TMP_ROOT/CASEFOLD/project"
+  wt_alt="$TMP_ROOT/CASEFOLD/wt"
+  if [ ! -d "$proj_alt" ]; then
+    pass "fm-claude-trust.sh: case-differing paths (skipped: case-sensitive filesystem)"
+    return 0
+  fi
+  out=$(run_trust "$CONFIG" "$WT" "$proj_alt")
+  expect_code 0 $? "a project path differing only by letter case must be accepted: $out"
+  out=$(run_trust "$CONFIG" "$wt_alt" "$proj_alt")
+  expect_code 0 $? "a worktree path differing only by letter case must be accepted: $out"
+  assert_trusted "$CONFIG/.claude.json" "$WT" "the worktree was not recorded under its on-disk spelling"
+  assert_trusted "$CONFIG/.claude.json" "$PROJ" "the project root was not recorded under its on-disk spelling"
+  assert_not_trusted "$CONFIG/.claude.json" "$wt_alt" "the worktree was recorded under the caller's letter case"
+  assert_not_trusted "$CONFIG/.claude.json" "$proj_alt" "the project root was recorded under the caller's letter case"
+  pass "fm-claude-trust.sh: paths differing only by letter case are trusted under their on-disk spelling"
+}
+
 # The trust dialog is read only from the PROJECT-root entry, never the
 # worktree entry (Claude Code's own git-root canonicalization collapses every
 # linked worktree to its primary checkout for that check, with no
@@ -838,6 +863,7 @@ test_secondmate_spawn_fails_closed_when_home_trust_cannot_be_recorded() {
 }
 
 test_fresh_worktree_is_trusted
+test_case_differing_paths_are_trusted_under_their_on_disk_spelling
 test_fresh_worktree_also_trusts_the_project_root_without_import_consent
 test_registration_carries_forward_existing_import_consent
 test_project_root_entry_preserves_other_keys
