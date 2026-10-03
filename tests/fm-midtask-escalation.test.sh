@@ -281,6 +281,59 @@ test_nm_round_threshold_suggests_up() {
   pass "fm-midtask-escalation: reaching the no-mistakes fix-round threshold suggests up"
 }
 
+# write_rounds <file> <step>:<rounds>...: a `no-mistakes stats --agents` table
+# in which each named step ran the given number of rounds.
+write_rounds() {
+  local file=$1 spec step rounds n
+  shift
+  printf 'STEP   ROUND  PURPOSE     AGENT  MODEL  SESSION  KEY  DURATION  MODEL  SUBPROC  RT  TOOLS  FIND  WORK  FALLBACK  EXIT\n' > "$file"
+  for spec in "$@"; do
+    step=${spec%%:*}
+    rounds=${spec##*:}
+    n=1
+    while [ "$n" -le "$rounds" ]; do
+      printf '%s %s      %s      claude opus   cold     k%s   1s        -      -        -   -      1     -/-   -         ok\n' \
+        "$step" "$n" "$step" "$n" >> "$file"
+      n=$((n + 1))
+    done
+  done
+}
+
+# check_with_rounds <name> <step>:<rounds>...: the `check` output for a
+# healthy working task whose selected run used those rounds.
+check_with_rounds() {
+  local name=$1 home wt crew bindir
+  shift
+  home=$(make_home "$name")
+  write_meta "$home" demo >/dev/null
+  wt=$(sed -n 's/^worktree=//p' "$home/state/demo.meta" | head -1)
+  write_status "$home" demo "working [at=$(now)]: validation running"
+  crew=$(stub_crew_state "$TMP_ROOT/bin-$name" "state: working · source: run-step · fixing")
+  bindir="$TMP_ROOT/bin-$name-nm"
+  write_rounds "$TMP_ROOT/rounds-$name.txt" "$@"
+  stub_no_mistakes "$bindir" "$wt" 01RUNDEMO000000000000000 running fixing "" "$TMP_ROOT/rounds-$name.txt"
+  FM_HOME="$home" FM_MIDTASK_CREW_STATE_BIN="$crew" PATH="$bindir:/usr/bin:/bin" "$TOOL" check demo
+}
+
+test_ci_only_rounds_never_suggest_up() {
+  local out
+  out=$(check_with_rounds ci-only review:1 ci:3)
+  assert_equals '' "$out" "three ci fix rounds alone are not worker difficulty"
+  out=$(check_with_rounds ci-many review:1 ci:6)
+  assert_equals '' "$out" "any number of ci fix rounds stays silent"
+  pass "fm-midtask-escalation: ci-step fix rounds never trigger the suggestion"
+}
+
+test_mixed_rounds_count_only_the_review_rounds() {
+  local out
+  out=$(check_with_rounds mixed-below review:2 ci:5)
+  assert_equals '' "$out" "ci rounds do not lift review rounds over the threshold"
+  out=$(check_with_rounds mixed-over review:3 ci:5)
+  assert_contains "$out" "suggests moving up a model class" "review rounds at the threshold still suggest up beside ci rounds"
+  assert_contains "$out" "no-mistakes used 3 fix round(s)" "the evidence names the review count, not the larger ci count"
+  pass "fm-midtask-escalation: a mixed run is judged on its review rounds only"
+}
+
 test_clean_healthy_task_gets_no_suggestion() {
   local home wt crew done_crew out bindir
   home=$(make_home clean)
@@ -378,6 +431,8 @@ test_old_failed_state_suggests_up
 test_parked_and_unknown_do_not_count_as_stall
 test_unfired_evidence_drift_does_not_re_suggest
 test_nm_round_threshold_suggests_up
+test_ci_only_rounds_never_suggest_up
+test_mixed_rounds_count_only_the_review_rounds
 test_clean_healthy_task_gets_no_suggestion
 test_arm_uses_a_distinct_check_id_and_disarm_removes_everything
 test_arm_refuses_without_a_recorded_task

@@ -45,7 +45,9 @@ PROJ_ARG=$2
 
 refuse() { echo "error: refusing to pre-register agy trust: $1" >&2; exit 1; }
 
-real_dir() { (cd -P -- "$1" 2>/dev/null && pwd -P); }
+# The external pwd, as in bin/fm-claude-trust.sh: the builtin keeps the caller's
+# letter case on a case-insensitive volume.
+real_dir() { (cd -P -- "$1" 2>/dev/null && { /bin/pwd -P 2>/dev/null || pwd -P; }); }
 logical_dir() { (cd -- "$1" 2>/dev/null && pwd -L); }
 real_file() { node -e 'process.stdout.write(require("node:fs").realpathSync(process.argv[1]))' "$1" 2>/dev/null; }
 

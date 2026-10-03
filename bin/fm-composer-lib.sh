@@ -475,6 +475,18 @@ FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^Ask anything(\.\.\.|…)|^P
 # ("Build · GPT-5.5 Fast OpenAI · high"). It is composer furniture, not typed
 # text, and only the run's LAST row is ever matched against it.
 FM_COMPOSER_LEFTBAR_FOOTER_RE_DEFAULT='^(Build|Plan)[[:space:]]+·[[:space:]]+'
+# Opencode also draws its working directory and git branch, right-aligned,
+# beside the SAME composer rows (task firstmate-opencode-composer-unknown;
+# verified live, opencode 1.18.32 through Herdr): a label such as
+# `~/.treehouse/homelab-iac-98bd78/1/` or `homelab-iac:fm/homelab-iac-remove-
+# plex-ct240`, flush against the pane's right edge and wrapped across however
+# many left-bar rows it needs, separated from the bar by a run of blank
+# columns no composer indent produces on its own. _fm_composer_row_is_leftbar_sidebar
+# recognises this shape structurally rather than by content, so it stays safe
+# as opencode's exact label text changes: this gap is the minimum width of
+# that blank run before it is trusted as right-aligned furniture rather than a
+# user's own indented paste.
+FM_COMPOSER_LEFTBAR_SIDEBAR_GAP=${FM_COMPOSER_LEFTBAR_SIDEBAR_GAP:-20}
 # Claude draws its permission-mode hint on its own row directly below the
 # composer (` ⏵⏵ bypass permissions on (shift+tab to cycle)`, ` ⏵⏵ accept edits
 # on`, ` ⏸ plan mode on`; verified live through Herdr on claude 2.1.236). The
@@ -1202,6 +1214,25 @@ _fm_composer_row_is_omp_status() {  # <trimmed-row>
   fm_composer_idle_matches "$1" "${FM_COMPOSER_OMP_STATUS_RE:-$FM_COMPOSER_OMP_STATUS_RE_DEFAULT}" sensitive
 }
 
+# Opencode draws a one-row status bar directly BELOW its left-bar composer
+# (and its floor row, when one is drawn): the open project path, then a
+# middle-dot separated token/context-usage cell, a cost cell, and its own
+# `ctrl+p commands` keybinding hint (verified live, opencode 1.18.32, through
+# Herdr: ` /Users/.../homelab-iac    81.6K (62%) · $0.07  ctrl+p commands    •
+# OpenCode 1.18.32`, task firstmate-opencode-composer-unknown). The left-bar
+# envelope's staleness probe (the same one that reads a bare composer's wrap
+# region below a box) has no glyph proof to open a footer zone for it -
+# opencode's own prompt character is the shell glyph `>`, deliberately outside
+# the agent set (see this file's COVERAGE note) - so without this rule that
+# status row reads as unclaimed activity below the composer and refuses the
+# whole envelope, even on a visibly idle pane. `ctrl+p commands` is the one
+# fixed, version-stable token in that row, so it alone is matched; the path,
+# token count, and cost figures all vary per pane and per turn.
+FM_COMPOSER_LEFTBAR_STATUS_RE_DEFAULT='ctrl\+p commands'
+_fm_composer_row_is_leftbar_status() {  # <trimmed-row>
+  fm_composer_idle_matches "$1" "${FM_COMPOSER_LEFTBAR_STATUS_RE:-$FM_COMPOSER_LEFTBAR_STATUS_RE_DEFAULT}" sensitive
+}
+
 # _fm_composer_row_is_pi_status: 0 when the trimmed row is Pi's dollar-first
 # footer stats row (FM_COMPOSER_PI_STATUS_RE_DEFAULT above). Furniture below
 # the separated pair; a `$` cost cell must not count as a dead-shell prompt.
@@ -1288,10 +1319,45 @@ _fm_composer_classify_bare_wrap() {  # <screen> <styled> <glyph-row> <cursor-row
   if [ "$styled" = 1 ]; then printf 'pending'; else printf 'unknown'; fi
 }
 
-# _fm_composer_classify_leftbar: opencode's left-bar composer. Blank rows and
-# the idle hint read empty; the run's LAST row may be the mode/model footer
-# (composer furniture, never typed text). Real content is pending when styling
-# can prove it real, unknown otherwise.
+# _fm_composer_row_is_leftbar_sidebar: 0 when <content> - a left-bar composer
+# row's text immediately after its single bar character is stripped, NOT yet
+# trimmed - is opencode's own right-aligned furniture: the working directory
+# and git branch label it draws beside the composer, wrapped across however
+# many rows it needs (task firstmate-opencode-composer-unknown). Typed
+# composer text starts right after the bar; this furniture instead sits flush
+# against the pane's right edge, separated from the bar by a run of blank
+# columns no reasonable composer indent produces. The row counts as furniture
+# only when NOTHING precedes that wide gap - a real draft with its own leading
+# indent still has content to the left of it - and the trailing text is a
+# SINGLE token with no embedded space, which a path or `repo:branch` label
+# never has and an ordinary typed sentence almost always does. This can only
+# ever move the verdict toward `empty`, never away from it: it is consulted
+# once per row, strictly before that row would otherwise count as pending_seen
+# content, and a row carrying any other text alongside the gap (the mode/model
+# footer row's own trailing branch overhang included) still fails the "nothing
+# precedes it" test and is judged by the existing footer and content checks.
+_fm_composer_row_is_leftbar_sidebar() {  # <content-after-bar, untrimmed>
+  local content=$1 gap=${FM_COMPOSER_LEFTBAR_SIDEBAR_GAP:-20} text left
+  case "$gap" in ''|*[!0-9]*) gap=20 ;; esac
+  fm_composer_normalize_spaces_var content
+  case "$content" in
+    *[![:space:]]*) : ;;
+    *) return 1 ;;
+  esac
+  text="${content##*[[:space:]]}"
+  [ -n "$text" ] || return 1
+  left="${content%"$text"}"
+  case "$left" in
+    *[![:space:]]*) return 1 ;;
+  esac
+  [ "${#left}" -ge "$gap" ]
+}
+
+# _fm_composer_classify_leftbar: opencode's left-bar composer. Blank rows, the
+# idle hint, and opencode's own right-aligned cwd/branch furniture read empty;
+# the run's LAST row may be the mode/model footer (composer furniture, never
+# typed text). Real content is pending when styling can prove it real, unknown
+# otherwise.
 _fm_composer_classify_leftbar() {  # <screen> <styled> <first-row> <last-row>
   local screen=$1 styled=$2 first=$3 last=$4
   local row raw content pending_seen=0 footer_re leading_blank=1 placeholder_position=0
@@ -1303,6 +1369,9 @@ _fm_composer_classify_leftbar() {  # <screen> <styled> <first-row> <last-row>
     case "$content" in
       '┃'*) content=${content#┃} ;;
     esac
+    if _fm_composer_row_is_leftbar_sidebar "$content"; then
+      row=$((row + 1)); continue
+    fi
     fm_composer_normalize_trim_var content
     if [ -z "$content" ]; then row=$((row + 1)); continue; fi
     if [ "$leading_blank" = 1 ] && [ "$row" -gt "$first" ]; then
@@ -1528,7 +1597,9 @@ _fm_composer_select_cursorless() {
     raw=$(_fm_composer_screen_row "$next" "$plain")
     trimmed=$raw
     fm_composer_normalize_trim_var trimmed
-    if [ -n "$trimmed" ] && ! fm_composer_row_has_edge "$trimmed"; then
+    if [ -n "$trimmed" ] && ! fm_composer_row_has_edge "$trimmed" \
+       && ! { [ "$FM_COMPOSER_SELECTED_KIND" = leftbar ] \
+              && _fm_composer_row_is_leftbar_status "$trimmed"; }; then
       FM_COMPOSER_SELECTED_KIND=
       return 1
     fi

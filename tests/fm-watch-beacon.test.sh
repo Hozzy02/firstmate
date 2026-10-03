@@ -6,8 +6,10 @@
 # no wall-clock timeout could block the per-window stale-pane capture for
 # however long a wedged shared herdr server stayed silent, and the sum of a
 # check sweep's per-check work could walk the beacon's age past its stale
-# grace even when no single step hung. These drive a real fm-watch.sh
-# subprocess against fixtures that reproduce both mechanisms and assert the
+# grace even when no single step hung. A third mechanism froze it before either
+# of those phases ran: the pending-reply tick paid a lock and several
+# subprocesses for every retained, already-resolved record. These drive a real
+# fm-watch.sh subprocess against fixtures that reproduce each mechanism and assert the
 # beacon keeps advancing well inside the grace window instead of only once
 # per whole cycle. The herdr-side unit for the RPC bound itself
 # (FM_BACKEND_HERDR_CLI_TIMEOUT) lives in tests/fm-backend-herdr.test.sh.
@@ -148,7 +150,54 @@ test_beacon_advances_between_checks_in_the_sweep() {
   pass "beacon advances at least once per check inside the sweep, $n advances in ${elapsed}s"
 }
 
+# Seed <count> pending-reply records in <state>, each delivered and then
+# resolved by its correlated parent report, through the production library.
+seed_resolved_pending_replies() {  # <home> <state> <count>
+  bash -c '
+    . "$1/bin/fm-pending-reply-lib.sh"
+    home=$2 state=$3 count=$4 i=0
+    while [ "$i" -lt "$count" ]; do
+      corr=$(fm_pending_reply_create "$home" "$state" mate "request $i") || exit 1
+      fm_pending_reply_mark_delivered "$state" "$corr" || exit 1
+      printf "done [corr=%s]: complete\n" "$corr" >> "$state/mate.status"
+      fm_pending_reply_try_resolve "$state" "$corr" || exit 1
+      i=$((i + 1))
+    done
+  ' _ "$ROOT" "$@" || fail "could not seed resolved pending-reply records"
+}
+
+# test_beacon_advances_with_many_resolved_pending_replies: pending-reply
+# records are retained after they resolve, so a long-lived home carries
+# hundreds, and the watcher's pending-reply tick visits every one each cycle.
+# The incident shape: under host load each subprocess is slow, and the tick
+# spent several of them (plus a lock) per already-resolved record, freezing the
+# beacon for the whole walk before any other phase could beat. The slow `cut`
+# fake stands in for that load on the record-field reads; a settled record must
+# cost none, so cycles keep turning over and the beacon keeps advancing.
+test_beacon_advances_with_many_resolved_pending_replies() {
+  local dir state fakebin out pid start elapsed n real_cut
+  dir=$(make_case beacon-resolved-pending-replies); state="$dir/state"; fakebin="$dir/fakebin"
+  seed_resolved_pending_replies "$dir" "$state" 25
+  # The reports that resolved the records are history, not a fresh signal.
+  rm -f "$state/mate.status"
+  real_cut=$(command -v cut) || fail "cut is not available"
+  printf '#!/usr/bin/env bash\nsleep 0.2\nexec %q "$@"\n' "$real_cut" > "$fakebin/cut"
+  chmod +x "$fakebin/cut"
+  out="$dir/out"
+  start=$(date +%s)
+  watch_bg "$state" "$fakebin" "$out" FM_CHECK_INTERVAL=999999
+  pid=$!
+  n=$(count_beat_advances "$state" "$pid" 150)
+  elapsed=$(( $(date +%s) - start ))
+  reap "$pid"
+  [ "$n" -ge 4 ] \
+    || fail "expected at least 4 distinct beacon advances across cycles with 25 resolved pending-reply records within ${elapsed}s, got $n; the tick is paying per-record cost for settled records"
+  [ -s "$out" ] && fail "resolved pending-reply records alone must not produce a wake, got: $(cat "$out")"
+  pass "beacon keeps advancing with 25 resolved pending-reply records under slow subprocesses, $n advances in ${elapsed}s"
+}
+
 test_beacon_advances_promptly_when_herdr_capture_hangs
 test_beacon_advances_between_checks_in_the_sweep
+test_beacon_advances_with_many_resolved_pending_replies
 
 echo "fm-watch-beacon tests passed"

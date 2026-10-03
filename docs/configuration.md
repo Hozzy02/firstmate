@@ -1238,6 +1238,8 @@ Firstmate runs it directly on the written brief before spawn, the same timing as
 
 The catalog is every installed skill visible to the worker: one entry per `<root>/<name>/SKILL.md` with a readable frontmatter `name:` and `description:` (only the description's first line, not its full multi-line text), read from `<project-dir>/.agents/skills` and `<project-dir>/.claude/skills` when `--project-dir` names a readable clone, the user-level skills directory (`FM_USER_SKILLS_OVERRIDE`, default `$HOME/.claude/skills`), and the `skills/` directory of every Claude Code plugin listed in `$HOME/.claude/plugins/installed_plugins.json` and enabled in `$HOME/.claude/settings.json`, named `<plugin>:<skill>`.
 Entries are de-duplicated by resolved directory, so a project whose `.agents/skills` or `.claude/skills` is the same tree as the user directory is counted once.
+Entries are then de-duplicated by name, with the first root in the order above winning, so a project copy of a skill replaces a same-named user-level copy; a plugin skill's `<plugin>:` prefix is part of its name.
+A skill directory with no readable `name:` or `description:` is skipped rather than guessed.
 An empty catalog, from an absent or empty tree at every root, returns `none` with reason `no installed skills found` without a model request.
 
 **What the model receives**

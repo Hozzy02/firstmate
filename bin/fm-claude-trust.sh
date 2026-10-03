@@ -229,7 +229,11 @@ refuse() { echo "error: refusing to pre-register Claude trust: $1" >&2; exit 1; 
 # shellcheck source=bin/fm-gate-refuse-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/fm-gate-refuse-lib.sh"
 
-real_dir() { (cd -P -- "$1" 2>/dev/null && pwd -P); }
+# The physical path of a directory, in the spelling the filesystem itself holds.
+# The external pwd asks the kernel; bash's builtin answers from the operand it
+# was given, so on a case-insensitive volume (macOS APFS) it keeps the caller's
+# letter case and two spellings of one directory would compare unequal below.
+real_dir() { (cd -P -- "$1" 2>/dev/null && { /bin/pwd -P 2>/dev/null || pwd -P; }); }
 
 # The fully resolved path of an existing file, or empty. Resolution runs in node
 # because it must follow a symlink chain to its final target, and node is

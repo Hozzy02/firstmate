@@ -35,6 +35,9 @@
 #     way bin/fm-crew-state.sh itself selects a run (bin/fm-nm-run-lib.sh's
 #     fm_nm_select_run) and then from `no-mistakes stats --agents --run`,
 #     whose ROUND column is the only place a fix-round count is exposed.
+#     Rounds on the ci step are not counted: those are the pipeline's own
+#     CI-fixer answering slow or flaky CI, which says nothing about the
+#     worker and which a relaunch on a bigger model would not change.
 #   - the task's own state/<id>.status log: how many `blocked:` reports it
 #     has appended since its last `resolved:`/`done:`/`failed:` line (its own
 #     worker rules already require appending `blocked:` on a repeated
@@ -48,9 +51,9 @@
 #
 # Suggest up (struggling) when ANY of
 #     - no-mistakes used FM_MIDTASK_ROUND_THRESHOLD (default 3) or more fix
-#       rounds on any step of its selected run (no-mistakes chains up to
-#       three rounds per step, so reaching the threshold means the chain the
-#       gate allows is spent)
+#       rounds on any step of its selected run other than ci (no-mistakes
+#       chains up to three rounds per step, so reaching the threshold means
+#       the chain the gate allows is spent)
 #     - the status log carries FM_MIDTASK_BLOCKED_THRESHOLD (default 2) or
 #       more `blocked:` reports since its last resolved/done/failed event
 #     - the last status event is FM_MIDTASK_STALL_SECONDS (default 1800)
@@ -125,7 +128,7 @@ check_id_for() { printf 'midtask-%s\n' "$1"; }  # <task-id> -> registered check 
 
 # --- evidence gathering -----------------------------------------------------
 
-# Sets ROUNDS_USED (highest ROUND any step needed, or empty when unknown) and
+# Sets ROUNDS_USED (highest ROUND any step but ci needed, or empty when unknown) and
 # NM_RUN_ID (the selected run it was read from). Never fails the caller: any
 # unreadable step just leaves ROUNDS_USED empty.
 nm_evidence() {  # <worktree> <branch>
@@ -145,7 +148,7 @@ nm_evidence() {  # <worktree> <branch>
   [ "$(fm_nm_field "$detail" branch)" = "$branch" ] || return 0
   stats=$(fm_nm_run_checked "$worktree" "$NM_TIMEOUT" stats --agents --run "$selected_id") || return 0
   round=$(printf '%s\n' "$stats" \
-    | awk '$1 ~ /^(intent|rebase|review|test|document|lint|push|pr|ci)$/ && $2 ~ /^[0-9]+$/ {print $2}' \
+    | awk '$1 ~ /^(intent|rebase|review|test|document|lint|push|pr)$/ && $2 ~ /^[0-9]+$/ {print $2}' \
     | sort -n | tail -1)
   case "$round" in ''|*[!0-9]*) ;; *) ROUNDS_USED=$round; NM_RUN_ID=$selected_id ;; esac
 }

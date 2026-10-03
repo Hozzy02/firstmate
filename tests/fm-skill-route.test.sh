@@ -239,7 +239,43 @@ _out=$(PATH="$FAKEBIN:$BASE_PATH" FM_HOME="$HOME_DIR" FM_USER_SKILLS_OVERRIDE="$
 _code=$?
 expect_code 0 "$_code" "an undescribed skill leaves an effectively empty catalog"
 assert_contains "$_out" '  reason: no installed skills found' "a skill with no readable description is skipped rather than guessed"
+
+reset_log
+NO_NAME_SKILLS="$TMP_ROOT/no-name-skills"
+mkdir -p "$NO_NAME_SKILLS/unnamed"
+printf -- '---\ndescription: Has a description but no name.\n---\nbody\n' > "$NO_NAME_SKILLS/unnamed/SKILL.md"
+write_skill "$NO_NAME_SKILLS/named" named "Has both keys."
+write_response "$RESPONSE" 0.8
+_out=$(PATH="$FAKEBIN:$BASE_PATH" FM_HOME="$HOME_DIR" FM_USER_SKILLS_OVERRIDE="$NO_NAME_SKILLS" TYPESAFE_API_KEY=$KEY "$TOOL" "$BRIEF" 2> "$TMP_ROOT/stderr")
+assert_equals '["skill_1"]' "$(jq -c '.questions | keys' "$LOG/body")" "a skill with no name adds no question"
+assert_contains "$_out" 'skill: named (Has both keys.)' "the named sibling stays in the catalog"
+assert_not_contains "$_out" 'unnamed' "a skill with no name is not listed under its directory name"
 pass "a skill directory with no readable name or description is skipped"
+
+# --- same-named skills collapse to one entry, project copy winning -----------
+reset_log
+rm -rf "$PROJ"
+DUP_USER_SKILLS="$TMP_ROOT/dup-user-skills"
+write_skill "$PROJ/.agents/skills/shared" shared "Project copy of the shared skill."
+write_skill "$PROJ/.claude/skills/shared" shared "Second project copy of the shared skill."
+write_skill "$DUP_USER_SKILLS/shared" shared "User copy of the shared skill."
+write_skill "$DUP_USER_SKILLS/solo" solo "Only installed at user level."
+DUP_PLUGIN="$TMP_ROOT/plugins/dup/1.0.0"
+write_skill "$DUP_PLUGIN/skills/shared" shared "Plugin skill sharing the bare name."
+mkdir -p "$HOME_DIR/.claude/plugins"
+jq -n --arg on "$DUP_PLUGIN" '{version: 2, plugins: {"helper@market": [{scope: "user", installPath: $on}]}}' > "$HOME_DIR/.claude/plugins/installed_plugins.json"
+printf '%s\n' '{"enabledPlugins": {"helper@market": true}}' > "$HOME_DIR/.claude/settings.json"
+write_response "$RESPONSE" 0.9 0.8 0.7
+_out=$(PATH="$FAKEBIN:$BASE_PATH" FM_HOME="$HOME_DIR" FM_USER_SKILLS_OVERRIDE="$DUP_USER_SKILLS" TYPESAFE_API_KEY=$KEY "$TOOL" "$BRIEF" --project-dir "$PROJ" 2> "$TMP_ROOT/stderr")
+assert_equals '["skill_1","skill_2","skill_3"]' "$(jq -c '.questions | keys' "$LOG/body")" "copies sharing one name ask one question"
+assert_contains "$_out" 'skill: shared (Project copy of the shared skill.)' "the project copy of a duplicated name is kept"
+assert_not_contains "$_out" 'User copy of the shared skill.' "the user-level copy of a duplicated name is dropped"
+assert_not_contains "$_out" 'Second project copy' "a second project copy of a duplicated name is dropped"
+assert_contains "$_out" 'skill: solo (Only installed at user level.)' "a user-level skill with its own name is kept"
+assert_contains "$_out" 'skill: helper:shared (Plugin skill sharing the bare name.)' "a plugin-prefixed name does not collide with the bare name"
+assert_contains "$_out" '  line: Load these skills: shared, solo, helper:shared' "the suggested line names each skill once"
+rm -rf "$HOME_DIR/.claude"
+pass "the catalog is de-duplicated by name, with the project copy winning"
 
 # --- a folded (>-) description reads only its first line ---------------------
 reset_log
