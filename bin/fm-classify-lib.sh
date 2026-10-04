@@ -2390,10 +2390,11 @@ _fm_status_open_decision_origins() {  # <status-file> [<kind>]
 #     material change its author chose to report, and a declared wait arms a
 #     recheck cadence, so both keep the positive-evidence absorb rule instead;
 #   - a secondmate's `done:` with no stated key, no legacy delivery token (PR
-#     ready, checks green, ready in branch, merged), and no slash, which every
-#     URL and every pointer to a report document carries: the mate's own
-#     acknowledgement or commentary, such as an instruction re-read or an idle
-#     report. The parent channel publishes every delivered outcome from its
+#     ready, checks green, ready in branch, merged), no slash (which every URL
+#     and every pointer to a report document carries), and no failure, blocker
+#     or decision wording, that states only an acknowledgement: an instruction
+#     or AGENTS.md re-read, or an idle / no work in flight / queue empty report.
+#     Any other unkeyed `done:` wakes by default. The parent channel publishes every delivered outcome from its
 #     scripts under a key (docs/secondmate-parent-channel.md), so an unkeyed
 #     line carries no delivery. A ship or scout `done:` is that task's handoff
 #     and is never routine;
@@ -2403,6 +2404,8 @@ _fm_status_open_decision_origins() {  # <status-file> [<kind>]
 # Everything else - a decision, blocker, failure, note, marked line, keyed
 # event, unknown verb, or delivered outcome - keeps its existing classification.
 FM_CLASSIFY_DELIVERY_RE='PR ready|checks green|ready in branch|merged|/'
+FM_CLASSIFY_ACK_RE='re-?read|AGENTS\.md|(^|[^[:alnum:]])idle([^[:alnum:]]|$)|no work in flight|nothing in flight|queue (is )?empty'
+FM_CLASSIFY_TROUBLE_RE='could not|couldn.?t|cannot|can.?t|unable|fail|block|error|need (your|a) |decision|decide|stuck|problem'
 
 status_line_is_routine() {  # <status-line> <kind>
   local line=$1 kind=$2 verb key prefix unstamped
@@ -2422,7 +2425,9 @@ status_line_is_routine() {  # <status-line> <kind>
     done)
       [ "$kind" = secondmate ] && [ -z "$key" ] || return 1
       _fm_status_unstamped "$line" unstamped
-      ! _fm_classify_matches "$unstamped" "$FM_CLASSIFY_DELIVERY_RE"
+      ! _fm_classify_matches "$unstamped" "$FM_CLASSIFY_DELIVERY_RE" || return 1
+      ! _fm_classify_matches "$unstamped" "$FM_CLASSIFY_TROUBLE_RE" || return 1
+      _fm_classify_matches "$unstamped" "$FM_CLASSIFY_ACK_RE"
       ;;
     *) return 1 ;;
   esac

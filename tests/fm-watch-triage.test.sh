@@ -840,7 +840,9 @@ test_secondmate_status_routine_absorbed_routed_surfaced_classifier() {
       'done [at=1]: shipped' 'failed [at=1]: broke' 'note: routed reply for the parent' \
       'resolved corr=0123456789abcdef [key=k4]: answered' \
       'working [corr=0123456789abcdef]: mirrored remote line' \
-      'shrug: an unknown verb'; do
+      'shrug: an unknown verb' \
+      'done: could not finish, blocked on missing credentials' 'done: tests failed, need your call' \
+      'done: finished the cleanup'; do
     printf 'working: routine\n%s\nworking: routine again\n' "$line" > "$state/sm.status"
     ! signal_crew_provably_working "$state/sm.status" \
       || fail "a busy secondmate's '$line' was absorbed as routine progress"
