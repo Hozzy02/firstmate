@@ -10,7 +10,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Firstmate's code, private files, or project location | [FM_HOME](#fm_home) and [operational home layout](#operational-home-layout-and-state) |
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
 | Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
-| Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
+| Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), [startup memory budget](#startup-memory-budget-configstartup-memory-budget), and [context cap](#context-cap-configcontext-cap) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
@@ -663,6 +663,40 @@ An inherited `data/captain-shared.md` counts in a secondmate's total but remains
 The internal [`/stow` skill](../.agents/skills/stow/SKILL.md) owns curation and its automatic secondmate cascade, which accounts every home against this same per-home allowance separately rather than against a fleet total.
 
 The helper's header owns exact parsing, publication, and report output mechanics.
+
+## Context cap (config/context-cap)
+
+A supervision conversation re-sends its whole history on every model request, so a session that lives for days pays for its full context on every notification it handles.
+The context cap bounds that: once a long-lived conversation's context crosses the cap, Firstmate restarts it at a safe boundary and the fresh conversation recovers from durable records.
+It is on by default at `150000` tokens.
+
+`config/context-cap` is a local, gitignored file holding one line: a positive integer token count, or `off` to disable the policy for this home.
+`FM_CONTEXT_CAP_TOKENS` overrides the file for one run.
+A value that is neither is an error that restarts nothing; `bin/fm-context-cap.sh status` reports it.
+The file is not inherited: a primary applies its own cap to its second mates, and a second mate's home never restarts its own conversation.
+
+### What gets restarted, and when
+
+- A local second mate over the cap is restarted by its parent through the same persist-then-restart pass `/updatefirstmate` uses.
+  The mate finishes the turn it is in, writes down the open work it holds only in conversation, and confirms; only that confirmation releases the restart.
+  A clean restart is silent, and a mate that was not restarted is reported once with the reason.
+- A primary over the cap is asked once to write down its open work and reset its own conversation.
+  The reset is submitted only when its prompt reads idle and empty, so a running turn or a half-typed line defers it, and a reset that cannot complete is reported once and leaves the conversation as it was.
+- A conversation whose first measured size was already above four fifths of the cap is reported once and never restarted, because a restart would free too little to be worth it.
+  Raise the cap or trim what loads at startup when that report appears.
+
+### Supported limits
+
+- Context size is measured only for Claude Code, at each turn end, from the session transcript its Stop hook names.
+  A conversation on any other harness has no measured size and is never restarted by this policy.
+- A remote second mate is not measured from its parent, so it is not restarted by this policy.
+- A primary reset needs a Claude primary in a terminal endpoint Firstmate can discover, the one [away-mode supervision](#away-mode-supervisor-backend-fm_supervisor_backend--fm_supervisor_target) resolves.
+  Without one the request to reset is refused with the reason and `/clear` typed by hand restarts the conversation the same way.
+- While an away or quiet record exists the primary is not asked to reset, because those notifications can be handled outside the primary conversation; it is asked once the record clears.
+  Second mates are still restarted.
+
+`bin/fm-context-cap.sh status [<secondmate-id>]` prints the cap, the measured size, and the verdict.
+The script's header owns the record format, the restart conditions, and the tuning variables.
 
 ## Stow pass horizon (config/stow-pass-horizon)
 
@@ -2415,6 +2449,8 @@ FM_SECONDMATE_LIVENESS_SECS=60   # seconds between watcher probes of each regist
 FM_SECONDMATE_LIVENESS_TIMEOUT=120   # seconds bounding one watcher-driven relaunch, so a wedged spawn cannot stall the poll; zero or invalid values use 120
 FM_SECONDMATE_LIVENESS_MAX_ATTEMPTS=3   # automatic relaunch attempts allowed per mate inside the window before the watcher parks auto-relaunch behind state/.secondmate-relaunch-bound-<id> and escalates once; a later live probe clears the marker and restores the full attempt budget (the ledger keeps its history behind a `rearmed` row); zero or invalid values use 3
 FM_SECONDMATE_LIVENESS_WINDOW_SECS=3600   # window the relaunch bound counts state/.secondmate-relaunch-<id> attempt lines over; the file is also the durable per-mate relaunch record; zero or invalid values use 3600
+FM_CONTEXT_CAP_TOKENS=   # per-run override of config/context-cap: a positive integer token count, or off; see "Context cap"
+FM_CONTEXT_CAP_TICK_SECS=120   # seconds between watcher runs of bin/fm-context-cap.sh tick, which acts on an over-cap conversation; zero or invalid values use 120
 FM_WEDGE_DEMAND_INSPECT_COUNT=3    # consecutive provably-working stale escalations on the same unchanged pane before demand-deep-inspection is added
 FM_WORKTREE_WRITE_PRUNE='.git node_modules .venv venv __pycache__ .mypy_cache .pytest_cache .ruff_cache .tox target dist build .next .cache vendor'   # directory names the wedge detector's task-worktree write probe skips; the default keeps .git out so a supervisor's own read-only git command can never look like crew progress; set it to the empty string to prune nothing, which widens the probe to the whole depth-bounded tree rather than disabling it
 FM_WORKTREE_WRITE_MAXDEPTH=6       # depth that same probe walks below the recorded worktree; it runs only at the moment a wedge escalation would otherwise fire, never on every poll; no probe knob applies to a secondmate, whose recorded worktree is a provisioned home the probe skips entirely

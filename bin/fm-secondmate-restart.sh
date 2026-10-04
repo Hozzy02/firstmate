@@ -2,7 +2,7 @@
 # Restart second mates onto the current instruction surface and launch-time
 # wiring, persisting their open records first.
 #
-# Usage: fm-secondmate-restart.sh <secondmate-id>... [--help]
+# Usage: fm-secondmate-restart.sh [--reason context-cap] <secondmate-id>... [--help]
 #
 # This is the executable half of /updatefirstmate's reload step. A running agent
 # holds AGENTS.md and every skill it has loaded frozen from launch, and no
@@ -55,6 +55,13 @@
 # restart transaction, its checkpoint, its journal, and its rollback; a refusal
 # before the agent is stopped leaves the mate running exactly as it was.
 #
+# --reason context-cap is the bounded-context restart (bin/fm-context-cap.sh
+# owns when it runs). The gate and the restart are unchanged; the persist
+# request names that reason instead of an update, and a mate that is not
+# restarted is reported unreached with no re-read nudge, because a nudge reloads
+# nothing this reason needs and only grows the conversation it is trying to
+# shrink.
+#
 # Restart candidacy itself belongs to bin/fm-update.sh, which knows which homes
 # the update pass actually left on the target commit; this command re-checks
 # capability on its own argv rather than trusting a caller's list.
@@ -72,7 +79,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 usage() {
-  sed -n '2,65{s/^# \{0,1\}//;p;}' "$0"
+  sed -n '2,72{s/^# \{0,1\}//;p;}' "$0"
 }
 
 case "${1:-}" in
@@ -101,8 +108,20 @@ case "$PERSIST_WAIT" in ''|*[!0-9]*) echo "error: FM_SECONDMATE_PERSIST_WAIT mus
 case "$PERSIST_POLL" in ''|*[!0-9]*|0) echo "error: FM_SECONDMATE_PERSIST_POLL must be a positive integer: $PERSIST_POLL" >&2; exit 2 ;; esac
 
 IDS=()
+REASON_MODE=update
+PERSIST_REQUEST=$FM_SECONDMATE_PERSIST_REQUEST
+expect_reason=0
 for arg in "$@"; do
+  if [ "$expect_reason" -eq 1 ]; then
+    expect_reason=0
+    case "$arg" in
+      context-cap) REASON_MODE=context-cap; PERSIST_REQUEST=$FM_SECONDMATE_CONTEXT_PERSIST_REQUEST ;;
+      *) echo "error: unknown restart reason '$arg'" >&2; usage >&2; exit 2 ;;
+    esac
+    continue
+  fi
   case "$arg" in
+    --reason) expect_reason=1; continue ;;
     -*) echo "error: unexpected argument '$arg'" >&2; usage >&2; exit 2 ;;
   esac
   # /updatefirstmate's action line names each mate by its fm-<id> selector; the
@@ -114,6 +133,7 @@ for arg in "$@"; do
   esac
   IDS+=("$id")
 done
+[ "$expect_reason" -eq 0 ] || { echo "error: --reason needs a value" >&2; usage >&2; exit 2; }
 [ "${#IDS[@]}" -gt 0 ] || { usage >&2; exit 2; }
 
 # Per-mate pass state, kept as parallel indexed arrays so this stays bash-3.2
@@ -146,6 +166,10 @@ first_reported_line() {  # <text>
 # plainly which it was. A nudge is a partial reload and is never reported as more.
 fall_back_to_nudge() {  # <id> <reason>
   local id=$1 reason=$2 out
+  if [ "$REASON_MODE" = context-cap ]; then
+    report_unreached "$id" "$reason"
+    return
+  fi
   if out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
     "$SCRIPT_DIR/fm-send.sh" "$id" "$FM_SECOND_MATE_NUDGE_MESSAGE" 2>&1); then
     nudged_count=$((nudged_count + 1))
@@ -290,14 +314,14 @@ while [ "$i" -lt "${#IDS[@]}" ]; do
   fi
 
   if ! corr=$(fm_pending_reply_create "$FM_HOME" "$STATE" "$id" \
-    "$FM_SECONDMATE_PERSIST_REQUEST"); then
+    "$PERSIST_REQUEST"); then
     REASON[i]="its answer about the open work cannot be tracked, so a clean reload could not be proven"
     i=$((i + 1))
     continue
   fi
   if ! send_out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
     FM_PENDING_REPLY_EXISTING_CORR="$corr" \
-    "$SCRIPT_DIR/fm-send.sh" "$id" "$FM_SECONDMATE_PERSIST_REQUEST" 2>&1); then
+    "$SCRIPT_DIR/fm-send.sh" "$id" "$PERSIST_REQUEST" 2>&1); then
     fm_pending_reply_discard_undelivered "$STATE" "$corr" >/dev/null 2>&1 || true
     REASON[i]="the request to write down its open work could not be delivered: $(first_reported_line "$send_out")"
     i=$((i + 1))

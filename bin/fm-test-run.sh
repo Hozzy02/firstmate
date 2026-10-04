@@ -342,6 +342,7 @@ family_for_basename() {
     fm-secondmate-restart.test.sh|fm-remote-secondmate-relaunch.test.sh|\
     fm-secondmate-safety.test.sh|fm-secondmate-sync.test.sh|\
     fm-startup-memory-budget.test.sh|fm-stow-cascade.test.sh|\
+    fm-context-cap.test.sh|\
     fm-send-secondmate-marker.test.sh|fm-shared-captain-inheritance.test.sh)
       printf '%s\n' secondmate
       ;;
@@ -354,6 +355,7 @@ family_for_basename() {
     fm-afk-pi-herdr-return-e2e.test.sh|\
     fm-bearings-board-lavish-live-e2e.test.sh|\
     fm-claude-stop-autoarm-live-e2e.test.sh|\
+    fm-context-cap-live-e2e.test.sh|\
     fm-cmux-claude-composer-live-e2e.test.sh|\
     fm-composer-matrix-live-e2e.test.sh|\
     fm-composer-codex-idle-live-e2e.test.sh|\
@@ -730,6 +732,8 @@ tests/fm-codex-hook-layer-live-e2e.test.sh 108
 tests/fm-composer-codex-idle-live-e2e.test.sh 77
 tests/fm-composer-matrix-live-e2e.test.sh 51
 tests/fm-contributions.test.sh 140911
+tests/fm-context-cap-live-e2e.test.sh 60
+tests/fm-context-cap.test.sh 6000
 tests/fm-control-relaunch.test.sh 114115
 tests/fm-control.test.sh 72794
 tests/fm-cursor-harness.test.sh 30088

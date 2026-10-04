@@ -759,6 +759,27 @@ tests/fm-afk-return.test.sh
 tests/fm-branch-supervision.test.sh
 ```
 
+## Bounded-context restart
+
+`bin/fm-context-cap.sh` depends on four Claude Code behaviors: the Stop payload names a transcript whose assistant entries carry request usage, a worker detached from the model's own Bash call outlives the turn, a submitted `/clear` opens a new session that runs the session-open hook, and a prompt submitted afterwards starts a turn.
+The opt-in live guard proves all four on a real interactive session in a private tmux server and a throwaway home, and is the command that refreshes this record.
+
+2026-10-04, Claude Code 2.1.289, macOS, tmux:
+
+```text
+$ FM_CONTEXT_CAP_LIVE_E2E=1 tests/fm-context-cap-live-e2e.test.sh
+ok - claude 2.1.289 (Claude Code): a turn end records the session's context size (66009 tokens) under its session id
+ok - claude 2.1.289 (Claude Code): the recorded size grows with the conversation (66009 then 66066 tokens)
+ok - claude 2.1.289 (Claude Code): an over-cap primary gets the persist-and-restart wake
+ok - claude 2.1.289 (Claude Code): the detached worker outlived the turn, submitted /clear at an idle empty prompt, and saw the session-open hook reset the record
+ok - claude 2.1.289 (Claude Code): the resume prompt ran a turn in a new session (17cb2c86-71dc-4355-bde8-46c54ec8f742, 72238 tokens; the reset one ended at 66066)
+ok - Claude 2.1.289 (Claude Code) live E2E recorded context size at turn end and reset an over-cap primary through /clear into a new supervised session
+```
+
+That version's folder-trust dialog preselects `No, exit`, so the guard moves the selection onto the trusting option before confirming it.
+The primary reset is not proven on a Herdr endpoint, and no other harness has a measured context size.
+`tests/fm-context-cap.test.sh` covers the record, the cap, and each tick decision with real processes and no harness, and `tests/fm-secondmate-restart.test.sh` covers the second-mate restart and its context-cap request.
+
 ## Wedge-alarm channels
 
 The two real notification channels were bounded manually on 2026-07-10 on macOS 26.5.2 with Herdr 0.7.3.
