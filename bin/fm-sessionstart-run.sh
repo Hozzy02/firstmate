@@ -141,6 +141,11 @@ case "$SOURCE" in
   resume|reload|fork)
     exec "$SCRIPT_DIR/fm-sessionstart-nudge.sh"
     ;;
+esac
+# Every other open starts from a context the recorded size no longer describes
+# (bin/fm-context-cap.sh owns the record and what reads its removal).
+"$SCRIPT_DIR/fm-context-cap.sh" reset >/dev/null 2>&1 || true
+case "$SOURCE" in
   clear|compact)
     if session_start_completed; then
       "$SCRIPT_DIR/fm-session-start.sh" --reemit --source "$SOURCE" || true

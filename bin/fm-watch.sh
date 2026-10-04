@@ -369,6 +369,11 @@ SECONDMATE_LIVENESS_MAX_ATTEMPTS=${FM_SECONDMATE_LIVENESS_MAX_ATTEMPTS:-}
 case "$SECONDMATE_LIVENESS_MAX_ATTEMPTS" in ''|*[!0-9]*|0) SECONDMATE_LIVENESS_MAX_ATTEMPTS=3 ;; esac
 SECONDMATE_LIVENESS_WINDOW_SECS=${FM_SECONDMATE_LIVENESS_WINDOW_SECS:-}
 case "$SECONDMATE_LIVENESS_WINDOW_SECS" in ''|*[!0-9]*|0) SECONDMATE_LIVENESS_WINDOW_SECS=3600 ;; esac
+# Bounded-context restart cadence: how often context_cap_tick asks
+# bin/fm-context-cap.sh, the policy's single owner, to act on an over-cap
+# conversation.
+CONTEXT_CAP_SECS=${FM_CONTEXT_CAP_TICK_SECS:-}
+case "$CONTEXT_CAP_SECS" in ''|*[!0-9]*|0) CONTEXT_CAP_SECS=120 ;; esac
 # A crew that declared a pause is idling on a known external wait, so its stale
 # pane is absorbed rather than wedge-escalated.
 # A captain-held or paused crew whose agent has confidently exited uses the same
@@ -1041,6 +1046,19 @@ EOF
     wake "$reason"
   done
   return 0
+}
+
+# Bounded-context restart policy. bin/fm-context-cap.sh owns the signal, the
+# cap, and every action; this only runs its tick on a cadence and exits the
+# cycle on the first wake it queued, as every other queued check does. A tick
+# that fails or prints nothing changes nothing here.
+context_cap_tick() {
+  local tick_marker="$STATE/.context-cap-tick" reason
+  [ "$(age_of "$tick_marker")" -ge "$CONTEXT_CAP_SECS" ] || return 0
+  touch "$tick_marker" || return 0
+  reason=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$SCRIPT_DIR/fm-context-cap.sh" tick 2>/dev/null | sed -n '1p') || true
+  [ -z "$reason" ] || wake "$reason"
 }
 
 # The ordinary-supervision half of the secondmate liveness guarantee, paired
@@ -2718,6 +2736,11 @@ while :; do
     echo "watcher: secondmate liveness check failed" >&2
     exit 1
   }
+
+  # Restart a conversation that has outgrown the context cap. After liveness so
+  # a mate that just died is relaunched there first; a relaunched mate's size
+  # record is gone, so this sees nothing to do for it.
+  context_cap_tick
 
   # A live secondmate endpoint does not prove that its own wake loop is alive.
   # Observe the foreign queue before the rest of this cycle so an aged row wakes

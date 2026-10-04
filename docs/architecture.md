@@ -488,6 +488,15 @@ Fetches blocked by an orphaned `.git/packed-refs.lock` use bounded retries and r
 Local-only projects, clones without an origin remote, and fetch failures remain benign skips.
 The refresh also prunes local branches whose remote is gone and that no worktree still needs.
 
+## Long-lived conversations stay bounded
+
+A supervision conversation's cost per notification grows with its history, so `bin/fm-context-cap.sh` restarts one that outgrows the configured cap.
+It adds a signal and a trigger, not a restart mechanism.
+The signal is the context size a Claude turn-end hook records for the session that owns the home's session lock.
+The trigger is one watcher cadence that hands an over-cap second mate to the persist-gated restart `/updatefirstmate` already uses, and asks an over-cap primary to write down its open work and reset its own conversation, after which its session-open hook re-emits the session-start digest.
+The mate's own confirmation, and the primary's idle and empty prompt, are the safe boundaries; nothing is stopped without a replacement path and no worktree is touched.
+The script's header owns the record, the conditions, and the limits, and [configuration.md](configuration.md#context-cap-configcontext-cap) owns the setting.
+
 ## Self-updates stay safe
 
 `/updatefirstmate` fast-forwards the running firstmate repo and registered secondmate homes from `origin` without touching project clones.

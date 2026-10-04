@@ -847,6 +847,39 @@ test_already_current_unprovable_mate_stays_on_the_nudge_path() {
   pass "T16 an already-current mate with an unprovable runtime keeps the honest nudge path"
 }
 
+# --- T17: the context-cap reason keeps the gate, names itself, and never nudges
+test_context_cap_reason_gates_without_a_nudge() {
+  local dir out rc request
+  dir=$(new_case ctxcap-gate)
+  add_local_mate "$dir" sm1
+  # No answer armed: the mate never confirms its open work is written down.
+  out=$(FM_TEST_PERSIST_WAIT=0 run_restart "$dir" --reason context-cap sm1); rc=$?
+
+  expect_code 3 "$rc" "an unconfirmed persist is not a restart"$'\n'"$out"
+  assert_contains "$out" "unreached: sm1:" "an unconfirmed context-cap restart must be reported unreached"
+  assert_not_contains "$out" "nudged: sm1" "a context-cap restart must never fall back to a re-read message"
+  assert_no_grep '^/exit$' "$dir/fake/literal" "the agent was stopped without a confirmed persist"
+  [ "$(find "$dir/home/state/sm1.inbox" -name '*.msg' | wc -l | tr -d ' ')" -eq 1 ] \
+    || fail "a context-cap restart sent the mate something besides the persist request"
+  request=$(cat "$dir/home/state/sm1.inbox"/*.msg)
+  assert_contains "$request" "context cap" "the request must name why the conversation is being replaced"
+  assert_not_contains "$request" "Firstmate was updated" "the request must not claim an update"
+  assert_contains "$request" "Open-record persistence" "the request must reuse stow's open-record contract"
+  assert_contains "$request" "Do NOT run the memory, learnings, or captain-preference sweeps" \
+    "the request must exclude the memory curation half of stow"
+
+  dir=$(new_case ctxcap-restart)
+  add_local_mate "$dir" sm1
+  arm_answer "$dir" sm1
+  out=$(run_restart "$dir" --reason context-cap sm1); rc=$?
+  expect_code 0 "$rc" "a confirmed persist should restart the mate"$'\n'"$out"
+  assert_contains "$out" "restarted: sm1 (claude)" "the mate should be restarted once it confirmed"
+
+  out=$(run_restart "$dir" --reason nonsense sm1); rc=$?
+  expect_code 2 "$rc" "an unknown reason is invalid use"
+  pass "T17 a context-cap restart keeps the persist gate, names its reason, and never nudges"
+}
+
 test_persist_gates_and_asks_only_for_open_records
 test_persist_precedes_restart
 test_arrived_answer_precedes_deadline_check
@@ -866,5 +899,6 @@ test_unpublished_worker_result_is_accounted_for
 test_result_published_while_reaping_is_honored
 test_already_current_mate_restarts_end_to_end
 test_already_current_unprovable_mate_stays_on_the_nudge_path
+test_context_cap_reason_gates_without_a_nudge
 
 echo "# all fm-secondmate-restart tests passed"
