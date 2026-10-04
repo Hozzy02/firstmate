@@ -1,0 +1,7 @@
+ROUTINE (absorbed)  done: re-read AGENTS.md, idle
+ROUTINE (absorbed)  done: idle, queue empty
+WAKES               done: could not finish, blocked on missing credentials
+WAKES               done: tests failed, need your call
+WAKES               done: finished the thing
+WAKES               blocked: x
+ROUTINE (absorbed)  working: step 2
