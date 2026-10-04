@@ -144,9 +144,19 @@ T2=$(record_field tokens)
 pass "claude $VERSION: the recorded size grows with the conversation ($T1 then $T2 tokens)"
 
 # --- the tick's verdict on that record ---------------------------------------
-# A cap between the session's first size and its current one is over the cap
-# without being under the fresh-session floor.
-printf '%s\n' "$((T1 + 1))" > "$LAB/config/context-cap"
+# A cap between a quarter above the session's first size (the fresh-session
+# floor is four fifths of the cap) and its current size is over the cap without
+# being too close to the baseline. Two short turns grow too little for that, so
+# read a bulky file first.
+awk 'BEGIN { for (i = 0; i < 3000; i++) print "context-cap filler line " i " padding padding padding padding" }' > "$LAB/filler.txt"
+STAMP="$(record_field ts):$S1"
+send_line 'Read the whole file filler.txt in the current directory with the Read tool (use offset and limit to read every line), then reply with exactly CTXTHREE and stop.'
+wait_for_text CTXTHREE 240 || { capture >&2; fail "claude $VERSION: the bulky-read turn did not complete"; }
+wait_for_record "$STAMP" || fail "claude $VERSION: the bulky-read turn end did not refresh the record"
+T2=$(record_field tokens)
+CAPV=$((T1 * 5 / 4 + 1))
+[ "$T2" -gt "$CAPV" ] || fail "claude $VERSION: the bulky read grew the context only to $T2 tokens, not past the $CAPV-token cap"
+printf '%s\n' "$CAPV" > "$LAB/config/context-cap"
 TICK=$(FM_HOME="$LAB" "$LAB/bin/fm-context-cap.sh" tick 2>&1)
 case "$TICK" in
   "check: context-cap primary conversation is at $T2 tokens"*"restart-primary --persisted"*) ;;
