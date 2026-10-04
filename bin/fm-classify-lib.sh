@@ -2394,8 +2394,8 @@ _fm_status_open_decision_origins() {  # <status-file> [<kind>]
 #     and every pointer to a report document carries), and no failure, blocker
 #     or decision wording, that states only an acknowledgement: an instruction
 #     or AGENTS.md re-read, or an idle / no work in flight / queue empty report.
-#     Any other unkeyed `done:` wakes by default. The parent channel publishes every delivered outcome from its
-#     scripts under a key (docs/secondmate-parent-channel.md), so an unkeyed
+#     Any other unkeyed `done:` wakes by default. The parent channel publishes
+#     every delivered outcome from its scripts under a key (docs/secondmate-parent-channel.md), so an unkeyed
 #     line carries no delivery. A ship or scout `done:` is that task's handoff
 #     and is never routine;
 #   - `resolved` outside the reserved key namespaces that closes no open decision
