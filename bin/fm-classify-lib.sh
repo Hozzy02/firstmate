@@ -75,8 +75,9 @@ unset _fm_classify_nounset
 
 # Captain-relevant status verbs. A status line carrying any of these is work
 # firstmate must see. Lines without these verbs are no-verb signals: the watcher
-# absorbs them only with positive provably-working evidence, while the daemon uses
-# its away-mode classification. FM_CAPTAIN_RE overrides the whole set when a home
+# absorbs a routine one outright ("Routine status lines" below) and any other
+# only with positive provably-working evidence, while the daemon uses its
+# away-mode classification. FM_CAPTAIN_RE overrides the whole set when a home
 # needs a custom verb vocabulary; absent, this default applies.
 #
 # Free-text tokens (PR ready, checks green, ready in branch, merged) exist only for
@@ -2022,12 +2023,24 @@ status_line_is_unread_surface() {  # <status-line>
   return 1
 }
 
+# 0 when a status line of a <kind> task belongs on the drain's unread-status
+# surface: the informational lines above, plus a routine `done:` acknowledgement
+# (see "Routine status lines" below), which no longer wakes the supervisor and
+# so has no other one-shot presentation.
+_fm_status_line_unread_for_kind() {  # <status-line> <kind>
+  local verb
+  status_line_is_unread_surface "$1" && return 0
+  status_line_verb "$1" verb
+  [ "$verb" = "done" ] && status_line_is_routine "$1" "$2"
+}
+
 # Fleet-wide unread informational lines: one "<task>\t<status-line>" row per
-# still-unread `note:` or pending-reply resolution, in glob (task id) order.
+# still-unread `note:`, pending-reply resolution, or routine acknowledgement, in
+# glob (task id) order.
 # Prints nothing when none are unread. Directory scan rejects status symlinks
 # the same way scan_open_decisions does.
 scan_unread_surface_lines() {  # <state>
-  local state=$1 f task lines line exclude
+  local state=$1 f task lines line exclude kind
   exclude=$(status_scan_parent_channel_exclude "$state")
   for f in "$state"/*.status; do
     [ -e "$f" ] || continue
@@ -2035,9 +2048,10 @@ scan_unread_surface_lines() {  # <state>
     task=$(basename "$f"); task="${task%.status}"
     lines=$(status_new_lines_since_cursor "$f") || return 1
     [ -n "$lines" ] || continue
+    kind=$(_fm_status_kind "$f")
     while IFS= read -r line; do
       [ -n "$line" ] || continue
-      status_line_is_unread_surface "$line" || continue
+      _fm_status_line_unread_for_kind "$line" "$kind" || continue
       printf '%s\t%s\n' "$task" "$line"
     done <<EOF
 $lines
@@ -2047,15 +2061,16 @@ EOF
 }
 
 scan_unread_surface_snapshot() {  # <state> <task-and-endpoint-snapshot>
-  local state=$1 snapshot=$2 task endpoint ident f lines line
+  local state=$1 snapshot=$2 task endpoint ident f lines line kind
   while IFS=$(printf '\t') read -r task endpoint ident; do
     [ -n "$task" ] || continue
     f="$state/$task.status"
     lines=$(status_new_lines_since_cursor "$f" "$endpoint") || return 1
     [ -n "$lines" ] || continue
+    kind=$(_fm_status_kind "$f")
     while IFS= read -r line; do
       [ -n "$line" ] || continue
-      status_line_is_unread_surface "$line" || continue
+      _fm_status_line_unread_for_kind "$line" "$kind" || continue
       printf '%s\t%s\n' "$task" "$line"
     done <<EOF
 $lines
@@ -2364,9 +2379,114 @@ _fm_status_open_decision_origins() {  # <status-file> [<kind>]
   printf '%s' "$origins"
 }
 
+# Routine status lines: the ONE definition of an append that is durable and
+# visible but never worth a supervisor turn of its own. Such a line never wakes
+# the supervisor from the signal path or the heartbeat backstop; it waits for
+# the next drain, whose UNREAD STATUS section prints a deferred acknowledgement,
+# and for the fleet view a heartbeat review already reads. A routine line is
+# unmarked - any correlation token makes it a routed reply, never routine - and
+# is one of:
+#   - `working:` with no stated key: progress prose. A keyed phase event is a
+#     material change its author chose to report, and a declared wait arms a
+#     recheck cadence, so both keep the positive-evidence absorb rule instead;
+#   - a secondmate's `done:` with no stated key, no legacy delivery token (PR
+#     ready, checks green, ready in branch, merged), and no slash, which every
+#     URL and every pointer to a report document carries: the mate's own
+#     acknowledgement or commentary, such as an instruction re-read or an idle
+#     report. The parent channel publishes every delivered outcome from its
+#     scripts under a key (docs/secondmate-parent-channel.md), so an unkeyed
+#     line carries no delivery. A ship or scout `done:` is that task's handoff
+#     and is never routine;
+#   - `resolved` outside the reserved key namespaces that closes no open decision
+#     or blocker. That last test needs the log's fold, so status_span_routine
+#     below applies it; this line-level read accepts the line provisionally.
+# Everything else - a decision, blocker, failure, note, marked line, keyed
+# event, unknown verb, or delivered outcome - keeps its existing classification.
+FM_CLASSIFY_DELIVERY_RE='PR ready|checks green|ready in branch|merged|/'
+
+status_line_is_routine() {  # <status-line> <kind>
+  local line=$1 kind=$2 verb key prefix unstamped
+  case "$line" in *corr=*) return 1 ;; esac
+  status_line_verb "$line" verb
+  key=$(_fm_decision_key "$line" '') || return 1
+  case "$verb" in
+    working)
+      [ -z "$key" ]
+      ;;
+    "${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}")
+      for prefix in ${FM_CLASSIFY_RESERVED_KEY_PREFIXES:-$FM_CLASSIFY_RESERVED_KEY_PREFIXES_DEFAULT}; do
+        case "$key" in "$prefix"*) return 1 ;; esac
+      done
+      return 0
+      ;;
+    done)
+      [ "$kind" = secondmate ] && [ -z "$key" ] || return 1
+      _fm_status_unstamped "$line" unstamped
+      ! _fm_classify_matches "$unstamped" "$FM_CLASSIFY_DELIVERY_RE"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# 0 when every nonblank line appended to <status-file> at or after
+# <start-offset> is routine under the definition above, including the fold test
+# for `resolved`: a line that closes a decision or blocker still open in the
+# bytes before it is an answer the supervisor must read. An empty span is
+# routine. An unreadable log, or any other line, returns 1 so the caller's
+# existing triage decides. Pure read.
+status_span_routine() {  # <status-file> <start-offset> [<kind>]
+  local f=$1 start=${2:-0} kind=${3:-} size chunk prefix_chunk line verb resolve held open='' after need_fold=0
+  [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 1
+  kind=$(_fm_status_kind "$f" "$kind")
+  size=$(_fm_status_file_size "$f") || return 1
+  size=${size//[[:space:]]/}
+  case "$size" in ''|*[!0-9]*) return 1 ;; esac
+  case "$start" in ''|*[!0-9]*) start=0 ;; esac
+  [ "$start" -le "$size" ] || start=0
+  [ "$start" -lt "$size" ] || return 0
+  chunk=$(_fm_status_read_span "$f" "$start" "$((size - start))") || return 1
+  resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
+  held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in *[![:space:]]*) ;; *) continue ;; esac
+    status_line_is_routine "$line" "$kind" || return 1
+    status_line_verb "$line" verb
+    [ "$verb" != "$resolve" ] || need_fold=1
+  done <<EOF
+$chunk
+EOF
+  [ "$need_fold" -eq 1 ] || return 0
+  # Every span line is routine, so none opens a decision: the set open before
+  # the span is the set each resolved line is tested against.
+  if [ "$start" -gt 0 ]; then
+    prefix_chunk=$(_fm_status_read_span "$f" 0 "$start") || return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+      status_line_verb "$line" verb
+      case "$verb" in
+        needs-decision|blocked|done|failed|"$resolve"|"$held")
+          open=$(_fm_decision_fold_line "$open" "$line" "$resolve" "$held" "$kind")
+          ;;
+      esac
+    done <<EOF
+$prefix_chunk
+EOF
+  fi
+  [ -n "$open" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    status_line_verb "$line" verb
+    [ "$verb" = "$resolve" ] || continue
+    after=$(_fm_decision_fold_line "$open" "$line" "$resolve" "$held" "$kind")
+    [ "$after" = "$open" ] || return 1
+  done <<EOF
+$chunk
+EOF
+  return 0
+}
+
 status_span_first_actionable_record() {  # <status-file> <start-offset> [record-var] [needs-decision-var]
   local f=$1 start=${2:-0} output_var=${3-} needs_var=${4-} size ident cur_ident scratch chunk_file result
   local line verb key origins='' folded=0 rc=1 failed=0 line_number=0 live_line='' events='' _line _key _fm_span_needs_decision=0
+  local span_kind=''
   [ -e "$f" ] || { [ -L "$f" ] && return 2; return 1; }
   [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 2
   ident=$(_fm_open_decisions_file_ident "$f") || return 2
@@ -2406,6 +2526,12 @@ status_span_first_actionable_record() {  # <status-file> <start-offset> [record-
     fi
     status_is_captain_relevant "$line" || continue
     verb=$(status_line_verb "$line")
+    if [ "$verb" = "done" ]; then
+      # A routine acknowledgement is not an event of this span (see "Routine
+      # status lines" above); the drain's UNREAD STATUS section presents it.
+      [ -n "$span_kind" ] || span_kind=$(_fm_status_kind "$f")
+      status_line_is_routine "$line" "$span_kind" && continue
+    fi
     case "$verb" in
       needs-decision|blocked)
         key=$(_fm_decision_key "$line") || {
@@ -2707,6 +2833,27 @@ _fm_secondmate_status_new_lines_routine() {  # <status-file> <state>
 $chunk
 EOF
   return 0
+}
+# 0 when a signal batch is nothing but routine status appends: every argument
+# is a .status file and each one's span since the watcher's classified position
+# is routine (status_span_routine). Such a batch is absorbed with no execution
+# proof, because a routine line asks nothing of the supervisor whether or not
+# its author is still busy. A turn-end marker in the batch returns 1: a stopped
+# turn is not a status line, and it keeps the positive-evidence rule below.
+signal_status_batch_routine() {  # <file> ...
+  local f dir start any=1
+  for f in "$@"; do
+    case "$f" in *.status) ;; *) return 1 ;; esac
+    dir=${f%/*}
+    [ "$dir" != "$f" ] || dir=.
+    start=0
+    if command -v fm_wake_signal_seen_size >/dev/null 2>&1; then
+      start=$(fm_wake_signal_seen_size "$dir" "$f")
+    fi
+    status_span_routine "$f" "$start" || return 1
+    any=0
+  done
+  return "$any"
 }
 signal_crew_provably_working() {  # <file> ...
   local f base dir task seen=""

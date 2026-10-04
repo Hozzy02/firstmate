@@ -6,8 +6,13 @@
 # is absorbed only when the crew shows it is still working through an actively
 # running no-mistakes step or a backend busy signal. A home that opts in with
 # config/turnend-churn-absorb lets a bare turn-end also use bounded pane churn
-# since the previous poll. Every other no-verb wake surfaces, so a crew
-# that finishes (or stops and waits) is never silently swallowed. A declared wait,
+# since the previous poll. A batch of nothing but routine status appends
+# (bin/fm-classify-lib.sh "Routine status lines": unkeyed progress notes, a
+# secondmate's unkeyed acknowledgement, a resolved line closing nothing) is
+# absorbed with no evidence, because it asks nothing of the supervisor; the drain
+# digest and the fleet view still show it. Every other no-verb wake surfaces, so
+# a crew that finishes (or stops and waits) is never silently swallowed: a stopped
+# turn and a stale pane keep the evidence rule whatever the log says. A declared wait,
 # either a paused: external wait or a verified captain-held transfer, is the
 # separate idle absorb case and re-surfaces only on its long bounded cadence,
 # although its initial no-verb status signal still surfaces in normal mode.
@@ -19,8 +24,9 @@
 # While state/.afk exists, the daemon owns triage and this watcher queues and exits
 # on every wake. Printed reason lines:
 #   signal: <file>...      status/turn-end signals, surfaced when a listed status
-#                          span has a captain-relevant event OR a no-verb signal lacks
-#                          positive execution evidence, unless afk is active
+#                          span has a captain-relevant event OR a no-verb signal that
+#                          is not a routine-only status batch lacks positive
+#                          execution evidence, unless afk is active
 #   stale: <window>        a provably-working stale is ALWAYS absorbed (with a wedge
 #                          timer) regardless of what the status log says - an active
 #                          run-step or busy pane outranks even a captain-relevant log
@@ -2927,6 +2933,10 @@ EOF
     #     (even via an interactive menu that wrote no done: status), waiting on a
     #     decision, or wedged. Absorbing such a turn-end is exactly the
     #     swallowed-finish this change guards against.
+    # A batch of nothing but routine status appends (signal_status_batch_routine,
+    # whose definition bin/fm-classify-lib.sh owns) is benign with no evidence at
+    # all: it asks nothing of the supervisor, and the drain digest and the fleet
+    # view still show it. Any other no-verb wake needs positive evidence.
     # Positive evidence is either an authoritative provably-working verdict or, in a
     # home that opts in with config/turnend-churn-absorb and for a BARE turn-end
     # alone, a pane that rendered something since the previous poll
@@ -2957,7 +2967,8 @@ EOF
     # bin/fm-supervise-daemon.sh).
     # shellcheck disable=SC2086  # same space-separated status-path list
     if afk_present || [ "$signal_actionable" -eq 0 ] \
-      || { ! signal_crew_provably_working $files && ! signal_turnend_panes_churned $files; }; then
+      || { ! signal_status_batch_routine $files && ! signal_crew_provably_working $files \
+        && ! signal_turnend_panes_churned $files; }; then
       while IFS=$(printf '\t') read -r sf sig f; do
         [ -n "$sf" ] || continue
         file_reason="$reason"
