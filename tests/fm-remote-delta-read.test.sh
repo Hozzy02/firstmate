@@ -51,14 +51,28 @@ assert_contains "$OUT" 'payload_bytes=11' 'the payload byte count is wrong'
 [ "$(tail -n 1 "$TMP_ROOT/growth.out")" = 'first line' ] || fail 'the delta did not carry the appended line'
 pass 'an appended line produces a delta with exact offsets, hashes, and payload'
 
-# An unchanged log closes the window with 75 and never runs the snapshot path:
-# one stat per sample is the whole per-poll cost.
+# An unchanged log exits 75 when the window closes and never repeats the
+# snapshot path: one stat per sample is the whole per-poll cost.
 DELTA_SHIM="$TMP_ROOT/delta-shim"
 EXEC_LOG="$TMP_ROOT/delta-execs"
 mkdir -p "$DELTA_SHIM"
 for TOOL in perl shasum sha256sum od tail head wc tr date stat dirname basename; do
   REAL=$(PATH=/usr/bin:/bin command -v "$TOOL" 2>/dev/null || true)
   [ -n "$REAL" ] || continue
+  if [ "$TOOL" = perl ]; then
+    cat > "$DELTA_SHIM/$TOOL" <<SH
+#!/bin/sh
+printf '%s\n' perl >> "\$FM_TEST_EXEC_LOG"
+"$REAL" "\$@"
+rc=\$?
+if [ "\$rc" -eq 0 ] && [ -n "\${FM_TEST_SNAPSHOT_DONE:-}" ]; then
+  : > "\$FM_TEST_SNAPSHOT_DONE"
+fi
+exit "\$rc"
+SH
+    chmod +x "$DELTA_SHIM/$TOOL"
+    continue
+  fi
   cat > "$DELTA_SHIM/$TOOL" <<SH
 #!/bin/sh
 printf '%s\n' $TOOL >> "\$FM_TEST_EXEC_LOG"
@@ -66,10 +80,44 @@ exec $REAL "\$@"
 SH
   chmod +x "$DELTA_SHIM/$TOOL"
 done
+# Model a same-second stat key without depending on how soon a loaded runner
+# schedules the rewrite. The real size, inode, and device still come from the
+# file; only the fractional mtime and ctime vary with the fixture contents.
+REAL_STAT=$(PATH=/usr/bin:/bin command -v stat)
+cat > "$DELTA_SHIM/stat" <<SH
+#!/bin/sh
+printf '%s\n' stat >> "\$FM_TEST_EXEC_LOG"
+if [ -n "\${FM_TEST_SAME_SECOND_LOG:-}" ] && [ "\${3:-}" = "\$FM_TEST_SAME_SECOND_LOG" ]; then
+  /usr/bin/perl -e '
+    my \$path = shift;
+    my @s = stat(\$path) or exit 1;
+    open my \$fh, "<", \$path or exit 1;
+    read(\$fh, my \$prefix, 5) == 5 or exit 1;
+    my \$fraction = \$prefix eq "OMEGA" ? "200000000" : "100000000";
+    print "\$s[7]:2000000000.\$fraction:2000000000.\$fraction:\$s[1]:\$s[0]\\n";
+  ' "\$FM_TEST_SAME_SECOND_LOG"
+  exit \$?
+fi
+exec "$REAL_STAT" "\$@"
+SH
+chmod +x "$DELTA_SHIM/stat"
 : > "$EXEC_LOG"
 : > "$DELTA_HOME/$DELTA_LOG_REL"
-FM_TEST_EXEC_LOG="$EXEC_LOG" PATH="$DELTA_SHIM:/usr/bin:/bin" run_reader 0 "$EMPTY_SHA" 4 > /dev/null && \
-  fail "an unchanged log did not exit 75" || RC=$?
+FM_TEST_EXEC_LOG="$EXEC_LOG" PATH="$DELTA_SHIM:/usr/bin:/bin" \
+  FM_HOME="$DELTA_HOME" FM_REMOTE_DELTA_POLL_SECONDS=0.05 \
+  "$READER" "$DELTA_LOG_REL" 0 "$EMPTY_SHA" 60 > /dev/null &
+READER_PID=$!
+# The capability probe and two gate stats show a repeated unchanged poll.
+# End the reader only after observing that state, rather than hoping a fixed
+# wait window admits enough polls under load.
+for _ in $(seq 1 6000); do
+  [ "$(grep -cx stat "$EXEC_LOG" || true)" -ge 3 ] && break
+  kill -0 "$READER_PID" 2>/dev/null || break
+  sleep 0.01
+done
+kill -TERM "$READER_PID" 2>/dev/null || true
+RC=0
+wait "$READER_PID" || RC=$?
 [ "${RC:-0}" -eq 75 ] || fail "an unchanged log closed its window with $RC instead of 75"
 perl_execs=$(grep -cx perl "$EXEC_LOG" || true)
 stat_execs=$(grep -cx stat "$EXEC_LOG" || true)
@@ -80,9 +128,12 @@ for TOOL in od tail head wc date; do
   hits=$(grep -cx "$TOOL" "$EXEC_LOG" || true)
   [ "$hits" -eq 0 ] || fail "an unchanged log ran $TOOL $hits times in the poll loop"
 done
-# One capability probe plus at least one gate stat: a loaded runner may fit
-# only one poll in the window, so the count proves the gate runs, not its rate.
-[ "$stat_execs" -ge 2 ] || fail "the unchanged window did not keep polling stat ($stat_execs)"
+# One capability probe plus at least two gate stats proves the unchanged gate
+# ran again without recapturing or hashing the file.
+[ "$stat_execs" -ge 3 ] || fail "the unchanged window did not keep polling stat ($stat_execs)"
+run_reader 0 "$EMPTY_SHA" 1 > /dev/null && \
+  fail 'an unchanged log did not exit 75 at the window' || RC=$?
+[ "$RC" -eq 75 ] || fail "an unchanged log closed its window with $RC instead of 75"
 pass 'an unchanged log costs one stat per poll and exits 75 at the window'
 
 # Growth still pays the capture and hashing tools exactly when bytes appear.
@@ -127,35 +178,31 @@ assert_contains "$OUT" 'reason=prefix-changed' 'the same-size rewrite was not na
 assert_contains "$OUT" 'to_offset=11' 'the break did not report the current size'
 pass 'a same-size in-place rewrite breaks continuity as prefix-changed'
 
-# A same-size rewrite of the same inode within the snapshot's own second leaves
-# size, inode, device, and whole-second mtime and ctime unchanged: only the
-# subsecond stat key can tell it moved. Each attempt starts on a second
-# boundary, rewrites once the first capture ran, and is retried only if the
-# rewrite still crossed into the next ctime second.
-ctime_second() { perl -e 'print +(stat shift)[10]' "$1"; }
-SAME_SECOND=
-for _ in 1 2 3 4 5 6 7 8; do
-  perl -MTime::HiRes=time,sleep -e 'sleep(1 - (time - int(time)))'
-  printf 'alpha\nbeta\n' > "$DELTA_HOME/$DELTA_LOG_REL"
-  BEFORE_SECOND=$(ctime_second "$DELTA_HOME/$DELTA_LOG_REL")
-  : > "$EXEC_LOG"
-  FM_TEST_EXEC_LOG="$EXEC_LOG" PATH="$DELTA_SHIM:/usr/bin:/bin" \
-    run_reader 11 "$PREFIX_SHA" 2 > "$TMP_ROOT/same-second.out" &
-  READER_PID=$!
-  for _ in $(seq 1 50); do grep -qx perl "$EXEC_LOG" && break; sleep 0.01; done
-  sleep 0.15
-  printf 'OMEGA\nbeta\n' > "$DELTA_HOME/$DELTA_LOG_REL"
-  AFTER_SECOND=$(ctime_second "$DELTA_HOME/$DELTA_LOG_REL")
-  RC=0
-  wait "$READER_PID" || RC=$?
-  [ "$BEFORE_SECOND" = "$AFTER_SECOND" ] || continue
-  SAME_SECOND=1
-  [ "$RC" -eq 0 ] || fail "the same-second rewrite read exited $RC instead of 0"
-  OUT=$(<"$TMP_ROOT/same-second.out")
-  assert_contains "$OUT" 'reason=prefix-changed' 'a same-second same-size rewrite was not detected'
-  break
+# A same-size rewrite of the same inode has equal whole-second timestamps in
+# the modeled stat response. Wait for the first snapshot to finish before
+# rewriting, so the next poll must notice only the changed subsecond fields.
+printf 'alpha\nbeta\n' > "$DELTA_HOME/$DELTA_LOG_REL"
+SNAPSHOT_DONE="$TMP_ROOT/same-second-snapshot-done"
+: > "$EXEC_LOG"
+FM_TEST_EXEC_LOG="$EXEC_LOG" FM_TEST_SNAPSHOT_DONE="$SNAPSHOT_DONE" \
+  FM_TEST_SAME_SECOND_LOG="$DELTA_HOME/$DELTA_LOG_REL" \
+  PATH="$DELTA_SHIM:/usr/bin:/bin" run_reader 11 "$PREFIX_SHA" 60 \
+  > "$TMP_ROOT/same-second.out" &
+READER_PID=$!
+for _ in $(seq 1 6000); do
+  [ -e "$SNAPSHOT_DONE" ] && break
+  kill -0 "$READER_PID" 2>/dev/null || break
+  sleep 0.01
 done
-[ -n "$SAME_SECOND" ] || fail 'no attempt landed the rewrite in the same ctime second'
+if [ ! -e "$SNAPSHOT_DONE" ]; then
+  kill -TERM "$READER_PID" 2>/dev/null || true
+  wait "$READER_PID" 2>/dev/null || true
+  fail 'the first same-second snapshot did not finish'
+fi
+printf 'OMEGA\nbeta\n' > "$DELTA_HOME/$DELTA_LOG_REL"
+wait "$READER_PID" || fail 'the same-second rewrite read did not exit 0'
+OUT=$(<"$TMP_ROOT/same-second.out")
+assert_contains "$OUT" 'reason=prefix-changed' 'a same-second same-size rewrite was not detected'
 pass 'a same-second same-size rewrite of the same inode breaks continuity'
 
 # A log that disappears mid-wait breaks as missing only for a nonzero cursor.

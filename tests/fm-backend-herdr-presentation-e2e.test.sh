@@ -145,6 +145,15 @@ if [ "${1:-} ${2:-}" = "pane get" ] && [ -d "$ACTIVE_SEEDED_CONTROL" ] \
 fi
 before=
 [ -z "$mutation" ] || before=$(focus_snapshot || printf ambiguous/ambiguous)
+if [ -n "${RECOVERY_HOLD_DIR:-}" ] && [ -n "${RECOVERY_HOLD_ID:-}" ] \
+   && case "$*" in *"/tmp/fm-$RECOVERY_HOLD_ID+"*) true ;; *) false ;; esac \
+   && mv "$RECOVERY_HOLD_DIR/arm" "$RECOVERY_HOLD_DIR/holding" 2>/dev/null; then
+  hold_tries=0
+  while [ ! -e "$RECOVERY_HOLD_DIR/waiting" ] && [ "$hold_tries" -lt 600 ]; do
+    sleep 0.05
+    hold_tries=$((hold_tries + 1))
+  done
+fi
 if out=$(env PATH="$HERDR_ORIGINAL_PATH" "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" "$@"); then
   status=0
 else
@@ -1299,10 +1308,19 @@ teardown_task "$CROSS_RESTART_ID" "$SECOND_HOME_A" > "$TMP_ROOT/cross-restart-te
 "$REAL_TREEHOUSE" return --force "$CROSS_NEW_WT" >/dev/null 2>&1 || true
 pass "real Herdr lab: secondmate restart binding and reclaim stay isolated to the exact child home and parent"
 
-# Two homes recovering concurrently serialize on the named session lock and
-# each replace only their own exact husk.
+# The primary recovery holds the named session lock through its last Herdr call
+# until the secondmate recovery is observed waiting on that lock, then releases
+# it. The handshake is state-based, so the second recovery's bounded lock wait
+# is real contention but independent of how long Herdr takes under load.
+RECOVERY_WAVES=${FM_TEST_RECOVERY_WAVES:-1}
+case "$RECOVERY_WAVES" in ''|*[!0-9]*|0) fail 'recovery wave count must be positive' ;; esac
+for WAVE_ROUND in $(seq 1 "$RECOVERY_WAVES"); do
 PRIMARY_WAVE_ID=resume-wave-primary
 BRAVO_WAVE_ID=resume-wave-bravo
+if [ "$WAVE_ROUND" -gt 1 ]; then
+  PRIMARY_WAVE_ID="$PRIMARY_WAVE_ID-$WAVE_ROUND"
+  BRAVO_WAVE_ID="$BRAVO_WAVE_ID-$WAVE_ROUND"
+fi
 mkdir -p "$HOME_DIR/data/$PRIMARY_WAVE_ID" "$SECOND_HOME_B/data/$BRAVO_WAVE_ID"
 write_ship_brief "$HOME_DIR" "$PRIMARY_WAVE_ID" 'Concurrent primary recovery fixture.'
 write_ship_brief "$SECOND_HOME_B" "$BRAVO_WAVE_ID" 'Concurrent secondmate recovery fixture.'
@@ -1323,12 +1341,34 @@ PATH="$HERDR_ORIGINAL_PATH" "$HERDR_LAB_HELPER" stop "$HERDR_LAB_SESSION" >/dev/
 PATH="$HERDR_ORIGINAL_PATH" "$HERDR_LAB_HELPER" provision "$HERDR_LAB_SESSION" \
   || fail "could not reprovision the isolated session for concurrent recovery"
 CONCURRENT_RECOVERY_FOCUS=$(focus_snapshot)
+RECOVERY_HOLD_DIR="$TMP_ROOT/recovery-hold-$WAVE_ROUND"
+mkdir -p "$RECOVERY_HOLD_DIR/shimbin"
+: > "$RECOVERY_HOLD_DIR/arm"
+cat > "$RECOVERY_HOLD_DIR/shimbin/sleep" <<'SH'
+#!/bin/sh
+if [ "${1:-}" = 0.1 ] && [ -e "$RECOVERY_HOLD_DIR/holding" ] \
+   && { [ -e "$RECOVERY_LOCK_PATH" ] || [ -L "$RECOVERY_LOCK_PATH" ]; }; then
+  : > "$RECOVERY_HOLD_DIR/waiting"
+fi
+exec /bin/sleep "$@"
+SH
+chmod +x "$RECOVERY_HOLD_DIR/shimbin/sleep"
+RECOVERY_LOCK_PATH=$(session_presentation_lock_path) \
+  || fail "could not resolve session lock for concurrent recovery"
+RECOVERY_HOLD_ID=$PRIMARY_WAVE_ID
+export RECOVERY_HOLD_DIR RECOVERY_HOLD_ID RECOVERY_LOCK_PATH
 spawn_task "$PRIMARY_WAVE_ID" "$HOME_DIR" "$RECOVERY_PROJECT_DIR" > "$TMP_ROOT/primary-wave-resume.out" 2> "$TMP_ROOT/primary-wave-resume.err" &
 PRIMARY_WAVE_PID=$!
-spawn_task "$BRAVO_WAVE_ID" "$SECOND_HOME_B" "$RECOVERY_PROJECT_DIR" > "$TMP_ROOT/bravo-wave-resume.out" 2> "$TMP_ROOT/bravo-wave-resume.err" &
+while [ ! -e "$RECOVERY_HOLD_DIR/holding" ] && kill -0 "$PRIMARY_WAVE_PID" 2>/dev/null; do sleep 0.01; done
+[ -e "$RECOVERY_HOLD_DIR/holding" ] \
+  || fail "primary recovery never held the session lock: $(cat "$TMP_ROOT/primary-wave-resume.err")"
+PATH="$RECOVERY_HOLD_DIR/shimbin:$PATH" spawn_task "$BRAVO_WAVE_ID" "$SECOND_HOME_B" "$RECOVERY_PROJECT_DIR" > "$TMP_ROOT/bravo-wave-resume.out" 2> "$TMP_ROOT/bravo-wave-resume.err" &
 BRAVO_WAVE_PID=$!
 wait "$PRIMARY_WAVE_PID" || fail "concurrent primary recovery failed: $(cat "$TMP_ROOT/primary-wave-resume.err")"
+[ -e "$RECOVERY_HOLD_DIR/waiting" ] \
+  || fail "secondmate recovery was never observed waiting on the held session lock"
 wait "$BRAVO_WAVE_PID" || fail "concurrent secondmate recovery failed: $(cat "$TMP_ROOT/bravo-wave-resume.err")"
+unset RECOVERY_HOLD_DIR RECOVERY_HOLD_ID RECOVERY_LOCK_PATH
 PRIMARY_WAVE_NEW_WT=$(remember_meta_worktree "$PRIMARY_WAVE_META")
 BRAVO_WAVE_NEW_WT=$(remember_meta_worktree "$BRAVO_WAVE_META")
 PRIMARY_WAVE_NEW_PANE=$(grep '^herdr_pane_id=' "$PRIMARY_WAVE_META" | cut -d= -f2-)
@@ -1352,7 +1392,8 @@ teardown_task "$BRAVO_WAVE_ID" "$SECOND_HOME_B" > "$TMP_ROOT/bravo-wave-teardown
 "$REAL_TREEHOUSE" return --force "$BRAVO_WAVE_OLD_WT" >/dev/null 2>&1 || true
 "$REAL_TREEHOUSE" return --force "$PRIMARY_WAVE_NEW_WT" >/dev/null 2>&1 || true
 "$REAL_TREEHOUSE" return --force "$BRAVO_WAVE_NEW_WT" >/dev/null 2>&1 || true
-pass "real Herdr lab: concurrent cross-home recoveries replace exact husks under one session lock with no focus drift"
+pass "real Herdr lab: concurrent cross-home recoveries replace exact husks under one session lock with no focus drift (wave $WAVE_ROUND/$RECOVERY_WAVES)"
+done
 
 # Seed a legacy old-format primary projection and a flat secondmate tab; correction must not migrate them.
 LEGACY_OUT=$(lab workspace create --cwd "$PROJECT_DIR" --label "firstmate/legacy-seed · p:AbCdEfGhIjKlMnOpQrStUv" --no-focus) \
