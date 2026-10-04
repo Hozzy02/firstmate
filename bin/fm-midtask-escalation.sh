@@ -60,6 +60,14 @@
 #       seconds old or older while bin/fm-crew-state.sh reports blocked or
 #       failed (parked waits on the captain and unknown means the tooling
 #       cannot see the worker, so neither is read as a struggle)
+# A suggestion that is otherwise due is withheld while the task's live current
+# state is done. The triggers above use the cheap bin/fm-crew-state.sh read
+# that skips its forge fallback, which reads a run whose only unfinished step
+# was the merge monitor as failed even when its PR is green and held for
+# merge; so, only at the point of printing, the full read is taken once per
+# new evidence signature, and a done verdict records that signature without
+# printing. Every other verdict, including a failed or unreadable one, prints
+# as before.
 # Otherwise `check` prints nothing. There is no down suggestion: no existing
 # state tells a task that proved simpler apart from an ordinary healthy one,
 # so that direction is deferred until such a signal exists.
@@ -184,9 +192,9 @@ status_evidence() {  # <status-file>
   fi
 }
 
-crew_state_word() {  # <task-id> -> state word, or "unknown"
+crew_state_word() {  # <task-id> [no-forge: 1|0] -> state word, or "unknown"
   local line
-  line=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CREW_STATE_NO_FORGE=1 \
+  line=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_CREW_STATE_NO_FORGE="${2:-1}" \
     "$CREW_STATE_BIN" "$1" 2>/dev/null) || true
   case "$line" in state:*) ;; *) printf 'unknown'; return ;; esac
   line=${line#state: }
@@ -256,6 +264,16 @@ jev_profile() {  # <id> <harness> <model> <effort> <project> <reason>
 
 # --- check -------------------------------------------------------------------
 
+record_signature() {  # <record-file> <signature>
+  local tmp
+  tmp=$(umask 077; mktemp "$STATE/.fm-midtask-escalation.XXXXXX" 2>/dev/null) || return 0
+  if printf '%s' "$2" > "$tmp" && chmod 0600 "$tmp"; then
+    mv -f -- "$tmp" "$1" || rm -f -- "$tmp"
+  else
+    rm -f -- "$tmp"
+  fi
+}
+
 action_check() {
   local id=$1 meta status_file worktree branch harness model effort kind project
   fm_pr_task_id_valid "$id" || die "invalid task id: $id"
@@ -286,6 +304,12 @@ action_check() {
   [ -f "$record" ] && prev=$(cat "$record" 2>/dev/null)
   [ "$signature" != "$prev" ] || return 0
 
+  # The live-state consult the header describes: one full read, only here.
+  if [ "$(crew_state_word "$id" 0)" = "done" ]; then
+    record_signature "$record" "$signature"
+    return 0
+  fi
+
   local profile
   profile=$(jev_profile "$id" "$harness" "$model" "$effort" "$project" "$REASON")
 
@@ -296,13 +320,7 @@ action_check() {
   printf 'midtask-escalation: %s suggests moving up a model class (current %s:%s:%s) - %s - relaunch: %s\n' \
     "$id" "${harness:--}" "${model:--}" "${effort:--}" "$REASON" "$relaunch_cmd"
 
-  local tmp
-  tmp=$(umask 077; mktemp "$STATE/.fm-midtask-escalation.XXXXXX" 2>/dev/null) || return 0
-  if printf '%s' "$signature" > "$tmp" && chmod 0600 "$tmp"; then
-    mv -f -- "$tmp" "$record" || rm -f -- "$tmp"
-  else
-    rm -f -- "$tmp"
-  fi
+  record_signature "$record" "$signature"
 }
 
 # --- arm / disarm --------------------------------------------------------------

@@ -39,7 +39,11 @@
 #                          also carries a "demand-deep-inspection" marker so the
 #                          wake payload itself, not just repetition, forces a
 #                          closer look instead of another routine supervision
-#                          resume. Unless afk is active. A pane about to escalate
+#                          resume. Each consecutive escalation on the same
+#                          unchanged pane needs twice the idle time of the
+#                          last, up to PAUSE_RESURFACE_SECS, so one idle pane
+#                          re-alarms on a widening bounded interval
+#                          (wedge_escalate_after). Unless afk is active. A pane about to escalate
 #                          that can account for its quiet - a `paused:` external
 #                          wait or a verified `captain-held` transfer its worker
 #                          declared, or, where config/wedge-defer-parked-gate
@@ -240,6 +244,10 @@ WATCH_HOME_EXISTED=0
 WATCH_LOCK="$STATE/.watch.lock"
 WATCH_PATH="$SCRIPT_DIR/fm-watch.sh"
 WATCHER_DOWNTIME_MARKER="$STATE/.watcher-down"
+# The recovery generation a watcher published on a clean close (exit 0, or a
+# HUP/TERM stop). Written only by watcher_cleanup and consumed once by the next
+# watcher's start, so a watcher that died without its cleanup leaves none.
+WATCHER_CLEAN_CLOSE="$STATE/.watcher-clean-close"
 # The singleton-lock acquisition, EXIT trap, and the blocking supervision loop
 # all live below the source guard at the very bottom of this file (see "Main
 # entry"). Sourcing this file for unit tests therefore loads the functions -
@@ -1497,6 +1505,23 @@ wedge_dead_record() {  # <window> <since-file> <triage-label> <idle-age> <pane-h
   wake "$reason"
 }
 
+# Sets WEDGE_ESCALATE_AFTER to the idle seconds this window must reach before
+# its next escalation (the backoff wedge_timer_check's header describes). An
+# unreadable count reads as none, which is the prompt first-alarm threshold.
+WEDGE_ESCALATE_AFTER=$STALE_ESCALATE_SECS
+wedge_escalate_after() {  # <escalation-count-file>
+  local n cap=$PAUSE_RESURFACE_SECS
+  WEDGE_ESCALATE_AFTER=$STALE_ESCALATE_SECS
+  [ "$cap" -ge "$STALE_ESCALATE_SECS" ] || cap=$STALE_ESCALATE_SECS
+  n=$(cat "$1" 2>/dev/null || true)
+  case "$n" in ''|*[!0-9]*) return 0 ;; esac
+  while [ "$n" -gt 0 ] && [ "$WEDGE_ESCALATE_AFTER" -lt "$cap" ]; do
+    WEDGE_ESCALATE_AFTER=$((WEDGE_ESCALATE_AFTER * 2))
+    n=$((n - 1))
+  done
+  [ "$WEDGE_ESCALATE_AFTER" -le "$cap" ] || WEDGE_ESCALATE_AFTER=$cap
+}
+
 # Repeat-poll wedge-timer bookkeeping for an already-classified stale hash
 # absorbed as provably-working - repairs a missing/corrupt timer (self-heals a
 # watcher restart between recording the hash and recording the timer), or
@@ -1516,6 +1541,15 @@ wedge_dead_record() {  # <window> <since-file> <triage-label> <idle-age> <pane-h
 # runs last of the three, so the two cheaper deferrals keep the panes they
 # already own on their existing bounded cadences and only a pane that would
 # otherwise alarm pays for a backend read.
+#
+# Per-pane backoff: the idle time one window must reach before it escalates
+# doubles with each consecutive escalation already counted for it, from
+# STALE_ESCALATE_SECS up to the PAUSE_RESURFACE_SECS recheck cadence
+# (wedge_escalate_after). The first alarm is as prompt as ever and the count
+# and demand-deep-inspection wording are unchanged, but an unchanged pane
+# re-alarms on a widening interval instead of once per STALE_ESCALATE_SECS
+# forever. The count file is removed wherever the pane's hash or busy state
+# moves, so any real change restores the prompt first alarm.
 wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-file> <task> <pane-hash>
   local win=$1 since_file=$2 label=$3 escalation_file=$4 task=$5 hash=$6 since age n reason evidence
   since=$(cat "$since_file" 2>/dev/null || true)
@@ -1530,7 +1564,8 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
     *)
       fm_epoch_seconds_to age
       age=$(( age - since ))
-      if [ "$age" -ge "$STALE_ESCALATE_SECS" ]; then
+      wedge_escalate_after "$escalation_file"
+      if [ "$age" -ge "$WEDGE_ESCALATE_AFTER" ]; then
         if evidence=$(wedge_wait_evidence "$task") &&
            wedge_defer_wait "$win" "$since_file" "$label" "$age" "$evidence"; then
           return 0
@@ -2460,9 +2495,19 @@ if [ -n "$EVICTED_PID" ]; then
   echo "watcher: replaced stalled pid $EVICTED_PID (beacon ${EVICTED_BEAT_AGE}s past hard bound ${WATCHER_STALL_BOUND}s)"
 fi
 WATCHER_RECOVERY_PENDING=0
+# The generation the predecessor watcher published on a clean close, consumed
+# here so it can vouch for one arm only. Empty when this arm recovered a dead
+# holder's lock or evicted a stalled holder, and when no clean close was
+# recorded at all (a killed watcher, a lock the arm cleared, a quarantined
+# marker). Only a recovery of exactly this generation can be absorbed
+# (recovery_resurface_absorbable below); every other one surfaces.
+WATCHER_PREDECESSOR_CLEAN_GEN=$(cat "$WATCHER_CLEAN_CLOSE" 2>/dev/null || true)
+rm -f "$WATCHER_CLEAN_CLOSE"
 if [ -n "${FM_LOCK_RECOVERED_PID:-}" ]; then
   WATCHER_RECOVERY_PENDING=1
+  WATCHER_PREDECESSOR_CLEAN_GEN=
 fi
+[ -z "$EVICTED_PID" ] || WATCHER_PREDECESSOR_CLEAN_GEN=
 if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" != 1 ]; then
   if ! fm_recovery_marker_reopen_announced "$WATCHER_DOWNTIME_MARKER"; then
     echo "watcher: recovery state could not be reopened safely; retaining stale lock evidence" >&2
@@ -2549,7 +2594,7 @@ pr_poll_publish_release() {
 }
 
 watcher_cleanup() {
-  local cleanup_status=0 owns_lock=0 transition=release-lock
+  local exit_status=$? cleanup_status=0 owns_lock=0 transition=release-lock
   pr_poll_publish_release || cleanup_status=1
   pr_poll_control_release || cleanup_status=1
   if [ "$(cat "$WATCH_LOCK/pid" 2>/dev/null || true)" = "${WATCHER_PID:-}" ]; then
@@ -2567,6 +2612,13 @@ watcher_cleanup() {
       downtime "$CLEANUP_LOCK_BOUND"; then
     echo "watcher: recovery state could not be persisted; retaining stale lock evidence" >&2
     cleanup_status=1
+  elif [ "$owns_lock" -eq 1 ] && [ "$transition" = release-lock ]; then
+    # Vouch for the generation just published only on a clean close; any other
+    # exit leaves no record, so its recovery surfaces.
+    case "$exit_status" in
+      0|129|143) printf '%s\n' "${FM_RECOVERY_MARKER_WRITTEN_TOKEN##*:}" > "$WATCHER_CLEAN_CLOSE" 2>/dev/null || true ;;
+      *) rm -f "$WATCHER_CLEAN_CLOSE" ;;
+    esac
   fi
   return "$cleanup_status"
 }
@@ -2630,6 +2682,35 @@ rerecord_device_shifted_pr_poll() {  # <id>
   return 0
 }
 
+# 0 when a due recovery wake has nothing to recover and supervision is healthy,
+# so waking firstmate would only spend a turn on an empty drain
+# (docs/watcher-continuity.md "Announcement" owns the contract). All of these
+# must hold: the daemon is not triaging, the episode is exactly the one the
+# predecessor watcher published on its own clean close, the durable queue is
+# empty, and no decision is still open in any status log - the drain
+# re-presents open decisions after downtime, so one of those still surfaces.
+# Nothing that arrived while no watcher ran is lost by absorbing: this same
+# cycle's signal, check, and stale scans compare against persisted markers and
+# surface it on their own.
+recovery_resurface_absorbable() {
+  afk_present && return 1
+  [ -n "$WATCHER_PREDECESSOR_CLEAN_GEN" ] || return 1
+  fm_recovery_marker_snapshot "$WATCHER_DOWNTIME_MARKER" || return 1
+  [ "$FM_RECOVERY_MARKER_TOKEN" = "announced:downtime:$WATCHER_PREDECESSOR_CLEAN_GEN" ] || return 1
+  [ ! -s "$FM_WAKE_QUEUE" ] || return 1
+  [ -z "$(scan_open_decisions "$STATE")" ]
+}
+
+# Retire the absorbed episode, generation-bound exactly like the drain's own
+# acknowledgement: an append that raced the checks above opened a fresh pending
+# generation, which this cannot retire and the next cycle's arm check recovers.
+recovery_resurface_absorb() {
+  fm_recovery_marker_ack "$WATCHER_DOWNTIME_MARKER" "$WATCHER_PREDECESSOR_CLEAN_GEN" || true
+  WATCHER_PREDECESSOR_CLEAN_GEN=
+  WATCHER_RECOVERY_PENDING=0
+  triage_log "absorbed rearm-resurface (clean watcher close, empty queue, no open decision)"
+}
+
 resurface_after_downtime() {
   # Handling successors already have a predecessor-delivered wake on the way.
   # Re-announcing from this cycle is what turned a lost handshake into an
@@ -2643,6 +2724,10 @@ resurface_after_downtime() {
       exit 1
     fi
     [ "$FM_RECOVERY_MARKER_ACTION" = recover ] || return 0
+  fi
+  if recovery_resurface_absorbable; then
+    recovery_resurface_absorb
+    return 0
   fi
   wake "check: rearm-resurface"
 }

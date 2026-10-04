@@ -160,8 +160,9 @@ unset FM_SUPERVISION_ACTOR FM_BRANCH_REPORT_TURN FM_LEASE_HOLDER_PID PI_CODING_A
 # Homes are registered in a file: make_home runs in a command substitution,
 # whose variables never reach this shell.
 HOMES_FILE="$TMP_ROOT/homes"
-# Stop whatever a case left running, by the exact pids its home recorded.
-stop_home_processes() {  # <home>
+# Stop the supervision <home> currently records: its host, that host's arms,
+# and its watcher.
+stop_home_supervision() {  # <home>
   local home=$1 pid arms='' i=0
   if [ -f "$home/state/.supervision-host" ]; then
     arms=$(awk -F '\t' '$1 == "arm" { print $2 }' "$home/state/.supervision-host")
@@ -177,9 +178,32 @@ stop_home_processes() {  # <home>
   done
   pid=$(cat "$home/state/.watch.lock/pid" 2>/dev/null || true)
   [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
+}
+# Stop whatever a case left running, by the exact pids its home recorded.
+stop_home_processes() {  # <home>
+  local home=$1 pid i
+  stop_home_supervision "$home"
   while IFS= read -r pid; do
     if [ -e "$home/session.stop" ]; then
+      # A stopped session ends once its hook closes, and a hook parked on a
+      # healthy watcher never closes on its own. A host that registered after
+      # the stop above is parked exactly so, so keep stopping whatever the home
+      # records until the session ends, and never wait on it without a bound.
+      i=0
+      while [ "$i" -lt 30 ] && kill -0 "$pid" 2>/dev/null; do
+        sleep 0.5
+        stop_home_supervision "$home"
+        i=$((i + 1))
+      done
+      kill -TERM "$pid" 2>/dev/null || true
+      i=0
+      while [ "$i" -lt 20 ] && kill -0 "$pid" 2>/dev/null; do
+        sleep 0.1
+        i=$((i + 1))
+      done
+      kill -KILL "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
+      stop_home_supervision "$home"
     else
       kill -TERM "$pid" 2>/dev/null || true
     fi
@@ -1762,10 +1786,29 @@ quiet_pass_through_successor() {  # <home>
     || fail "fixture: could not acknowledge the successor downtime"
 }
 
+absorbed_recoveries() {  # <home>
+  local n
+  n=$(grep -c 'absorbed rearm-resurface' "$1/state/.watch-triage.log" 2>/dev/null || true)
+  printf '%s\n' "${n:-0}"
+}
+# True once the park started after a stop has settled: its watcher absorbed a
+# recovery with nothing to recover, or its first close reached main.
+park_after_stop_settled() {  # <home> <absorbed-before>
+  host_exited "$1" || [ "$(absorbed_recoveries "$1")" -gt "$2" ]
+}
 park_after_stop() {  # <home>
+  local absorbed
+  absorbed=$(absorbed_recoveries "$1")
   rm -f "$1/host.rc"
   : > "$1/park.go"
-  wait_until 150 host_exited "$1" || fail "the watcher's downtime resurface did not reach main: $(cat "$1/host.out")"
+  wait_until 150 park_after_stop_settled "$1" "${absorbed:-0}" \
+    || fail "the park after a stop neither absorbed nor resurfaced the watcher's downtime: $(cat "$1/host.out")"
+  # A stop that closed its watcher cleanly with nothing queued leaves nothing
+  # to resurface, so this park is already the steady one.
+  if ! host_exited "$1"; then
+    wait_until 150 watcher_live "$1" || fail "fixture: the park that absorbed its recovery has no live watcher"
+    return 0
+  fi
   assert_re '^check: rearm-resurface' "$1/host.out" "fixture: the first close after the watcher stopped was not its resurface"
   main_drain_and_ack "$1"
   quiet_pass_through_successor "$1"

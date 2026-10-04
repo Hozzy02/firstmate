@@ -3055,6 +3055,58 @@ wedge_reported_wait_secs() {  # <watch-out>
   sed -n 's/.*waiting \([0-9][0-9]*\)s.*/\1/p' "$1" | head -1
 }
 
+# One idle pane must not alarm once per escalation threshold forever: each
+# consecutive escalation of the same unchanged pane needs twice the idle time of
+# the last, up to the pause recheck cadence, while a pane with no escalation
+# behind it still alarms at the base threshold.
+test_wedge_escalation_backs_off_per_pane() {
+  local dir state fakebin out capture window key
+  local working='state: working · source: run-step · ci running'
+  window="test:fm-wedge"; key=$(printf '%s' "$window" | tr ':/.' '___')
+
+  # Two escalations already counted: the next needs four thresholds of idle
+  # time, so a pane idle for two and a half is absorbed.
+  dir=$(wedge_threshold_fixture backoff-inside 'working: validation under way' 0 250)
+  state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  printf '2\n' > "$state/.wedge-escalations-$key"
+  FM_TEST_STALE_ESCALATE=100 wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" absorb \
+    || fail "an idle pane re-escalated inside its backed-off interval: $(cat "$out")"
+  [ "$(wedge_stale_wakes "$state" "$window")" -eq 0 ] \
+    || fail "an idle pane queued a wedge wake inside its backed-off interval: $(cat "$state/.wake-queue")"
+  [ "$(cat "$state/.wedge-escalations-$key")" = 2 ] \
+    || fail "an absorbed poll changed the escalation count"
+
+  # The same pane past that interval is still stuck, so it escalates again with
+  # the count and deep-inspection wording it had earned.
+  dir=$(wedge_threshold_fixture backoff-due 'working: validation under way' 0 450)
+  state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  printf '2\n' > "$state/.wedge-escalations-$key"
+  FM_TEST_STALE_ESCALATE=100 wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" exit \
+    || fail "an idle pane past its backed-off interval never re-escalated: $(cat "$out")"
+  grep -F 'possible wedge, escalation 3, demand-deep-inspection' "$out" >/dev/null \
+    || fail "the backed-off escalation lost its count or deep-inspection wording: $(cat "$out")"
+
+  # No escalation behind it: a genuinely stuck pane alarms at the base threshold.
+  dir=$(wedge_threshold_fixture backoff-first 'working: validation under way' 0 150)
+  state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  FM_TEST_STALE_ESCALATE=100 wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" exit \
+    || fail "a first wedge escalation did not fire at the base threshold: $(cat "$out")"
+  grep -F 'possible wedge, escalation 1)' "$out" >/dev/null \
+    || fail "the first escalation was not reported as escalation 1: $(cat "$out")"
+
+  # The interval is bounded: however many escalations are counted, the pause
+  # recheck cadence is the longest a stuck pane can stay quiet.
+  dir=$(wedge_threshold_fixture backoff-capped 'working: validation under way' 0 350)
+  state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  printf '12\n' > "$state/.wedge-escalations-$key"
+  FM_TEST_STALE_ESCALATE=100 FM_TEST_PAUSE_RESURFACE=300 \
+    wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" exit \
+    || fail "a long-escalated pane stayed quiet past the recheck cadence: $(cat "$out")"
+  grep -F 'possible wedge, escalation 13' "$out" >/dev/null \
+    || fail "the capped escalation was not reported: $(cat "$out")"
+  pass "wedge escalations back off per unchanged pane, stay bounded, and still fire for a stuck pane"
+}
+
 test_wedge_threshold_defers_to_a_declared_wait_under_a_working_verdict() {
   local dir state fakebin out capture window key n past reported
   local working='state: working · source: run-step · ci running'
@@ -4515,8 +4567,9 @@ test_wedge_escalation_marks_demand_deep_inspection_after_threshold() {
   while [ "$n" -le 3 ]; do
     # Backdate the wedge timer past the threshold before each round, mirroring
     # the existing wedge-escalation tests' Phase B (the subsequent-sight timer
-    # path does not re-read the crew state).
-    echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+    # path does not re-read the crew state). Each consecutive round's threshold
+    # is twice the last, so the backdate doubles with it.
+    echo $(( $(date +%s) - (240 << (n - 1)) - 20 )) > "$state/.stale-since-$key"
     : > "$out"
     PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
       FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
@@ -4991,7 +5044,8 @@ test_busy_pane_repeated_escalation_reaches_demand_deep_inspection() {
 
   n=1
   while [ "$n" -le 3 ]; do
-    echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+    # Each consecutive round's threshold is twice the last.
+    echo $(( $(date +%s) - (240 << (n - 1)) - 20 )) > "$state/.stale-since-$key"
     : > "$out"
     PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
       FM_STATE_OVERRIDE="$state" FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
@@ -6707,6 +6761,7 @@ test_own_work_wait_keeps_first_alert_then_long_cadence
 test_absorbed_replacement_wait_does_not_inherit_the_old_throttle
 test_live_declared_wait_churn_honors_the_resurface_throttle
 test_live_paused_until_controls_recheck_time
+test_wedge_escalation_backs_off_per_pane
 test_wedge_threshold_defers_to_a_declared_wait_under_a_working_verdict
 test_wedge_threshold_keeps_a_wait_past_a_default_key_answer
 test_wedge_threshold_recheck_names_the_captain_for_a_held_lane
