@@ -206,7 +206,7 @@ In its `--claude` mode it cooperates with the auto-arm.
 ## Recovery episode acknowledgement
 
 A recovery episode is one generation of the `state/.watcher-down` marker.
-It is retired only by the generation-bound acknowledgement the drain prints as `WAKE_ACK_REQUIRED`.
+It is retired by the generation-bound acknowledgement the drain prints as `WAKE_ACK_REQUIRED`, or by the watcher's own generation-bound absorb of an episode with nothing to recover (see [Announcement](#announcement)).
 The away return brief treats a still-open handling episode as a wake in progress, not watcher downtime; an open downtime episode remains a gap.
 
 ### Announcement
@@ -216,6 +216,9 @@ The first recovery marks that generation announced, and later empty-queue arms l
 A non-successor watcher start checks the durable queue and recovery marker under their locks.
 If an announced-but-unacknowledged episode has an empty queue, the arm leaves that generation announced, making repeated empty-queue arms idempotent while a long-poll source is merely alive.
 If a durable row arrived after the announcement, the arm opens a fresh pending downtime generation so buried work still resurfaces once.
+A due announcement with nothing to recover is absorbed instead of waking firstmate: when the episode is exactly the generation the predecessor watcher recorded in `state/.watcher-clean-close` on its own clean close, the durable queue is empty, no decision is still open in any status log, and the legacy daemon flag is absent, the watcher retires that generation itself, logs the absorb to `state/.watch-triage.log`, and keeps polling.
+A watcher records that generation only when it exits successfully or is stopped by HUP or TERM, and the next watcher start consumes the record, so a killed watcher, a recovered or cleared stale lock, an evicted stalled holder, and a quarantined marker each still announce, as do a queued row and an open decision.
+Anything that arrived while no watcher ran is surfaced by that same cycle's own signal, check, and stale scans rather than by the announcement.
 
 ### Generation reuse
 

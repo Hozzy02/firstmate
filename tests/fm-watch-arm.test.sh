@@ -912,6 +912,96 @@ SH
   pass "watch-arm: an idle Lavish source stays quiet and its real result wakes promptly"
 }
 
+# The watcher pid a confirmed arm reported in its own output.
+armed_watcher_pid() {  # <arm-out>
+  sed -n 's/^watcher: started pid=\([0-9][0-9]*\).*$/\1/p' "$1" | head -1
+}
+
+# Wait for an arm whose watcher was stopped from outside, whatever status that
+# arm then exits with.
+arm_gone() {  # <arm-pid>
+  local i=0
+  while [ "$i" -lt "$REARM_EXIT_POLLS" ] && is_live_non_zombie "$1"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  ! is_live_non_zombie "$1" || return 1
+  wait "$1" 2>/dev/null || true
+}
+
+# A watcher that closed cleanly with nothing queued leaves nothing to recover,
+# so the next arm supervises instead of waking firstmate for an empty drain. A
+# queued row, and a watcher that died without closing, both still surface.
+test_clean_close_empty_recovery_is_absorbed() {
+  local dir home state fakebin watcher i
+  dir=$(make_case clean-close-absorb)
+  home="$dir/home"
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  mkdir -p "$home/data"
+
+  start_rearm_arm "$home" "$state" "$fakebin" "$dir/first-arm.out"
+  is_live_non_zombie "$ARM_PID" || fail "clean-close fixture watcher did not stay live"
+  watcher=$(armed_watcher_pid "$dir/first-arm.out")
+  [ -n "$watcher" ] || fail "clean-close fixture arm reported no watcher pid"
+  kill -TERM "$watcher" 2>/dev/null || fail "could not stop the fixture watcher"
+  arm_gone "$ARM_PID" || fail "the arm outlived its stopped watcher"
+  case "$(cat "$state/.watcher-down" 2>/dev/null || true)" in
+    pending:downtime:*) ;;
+    *) fail "a clean close did not publish pending downtime" ;;
+  esac
+  [ -s "$state/.watcher-clean-close" ] || fail "a clean close left no clean-close record"
+
+  start_rearm_arm "$home" "$state" "$fakebin" "$dir/absorb-arm.out"
+  # The arm confirms its watcher before that watcher's first cycle decides the
+  # recovery, so wait for the decision itself rather than for the confirmation.
+  i=0
+  while [ "$i" -lt "$REARM_EXIT_POLLS" ] && is_live_non_zombie "$ARM_PID" \
+    && ! grep -F 'absorbed rearm-resurface' "$state/.watch-triage.log" >/dev/null 2>&1; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  is_live_non_zombie "$ARM_PID" \
+    || fail "an empty recovery after a clean close woke firstmate: $(cat "$dir/absorb-arm.out")"
+  ! grep -F 'check: rearm-resurface' "$dir/absorb-arm.out" >/dev/null \
+    || fail "an empty recovery after a clean close was announced"
+  grep -F 'absorbed rearm-resurface' "$state/.watch-triage.log" >/dev/null 2>&1 \
+    || fail "the absorbed recovery was not logged"
+  case "$(cat "$state/.watcher-down" 2>/dev/null || true)" in
+    acked:*) ;;
+    *) fail "the absorbed recovery episode was not retired: $(cat "$state/.watcher-down" 2>/dev/null)" ;;
+  esac
+  [ ! -e "$state/.watcher-clean-close" ] || fail "the clean-close record was not consumed"
+
+  # Real work still wakes the absorbing watcher, and its unhandled row still
+  # surfaces at the next arm even though that watcher also closed cleanly.
+  printf 'blocked: a wake the absorbing watcher must still surface\n' > "$state/later.status"
+  wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "the absorbing watcher missed a later wake"
+  grep -q '^signal:' "$dir/absorb-arm.out" || fail "the absorbing watcher did not report the later wake"
+  start_rearm_arm "$home" "$state" "$fakebin" "$dir/queued-arm.out"
+  wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" || fail "a queued row was absorbed after a clean close"
+  grep -F 'check: rearm-resurface' "$dir/queued-arm.out" >/dev/null \
+    || fail "a queued row did not surface as recovery: $(cat "$dir/queued-arm.out")"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$DRAIN" >/dev/null 2>&1 || fail "queued-row drain failed"
+  ack_wakes "$state" || fail "queued-row acknowledgement failed"
+
+  # A watcher killed without its cleanup vouches for nothing: the same empty
+  # queue still surfaces its recovery.
+  start_rearm_arm "$home" "$state" "$fakebin" "$dir/doomed-arm.out"
+  is_live_non_zombie "$ARM_PID" || fail "the watcher armed after acknowledgement did not stay live"
+  watcher=$(armed_watcher_pid "$dir/doomed-arm.out")
+  [ -n "$watcher" ] || fail "the doomed arm reported no watcher pid"
+  kill -KILL "$watcher" 2>/dev/null || fail "could not kill the doomed watcher"
+  arm_gone "$ARM_PID" || fail "the arm outlived its killed watcher"
+  [ ! -e "$state/.watcher-clean-close" ] || fail "a killed watcher left a clean-close record"
+  start_rearm_arm "$home" "$state" "$fakebin" "$dir/unclean-arm.out"
+  wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" \
+    || fail "an empty recovery after a killed watcher was absorbed"
+  grep -F 'check: rearm-resurface' "$dir/unclean-arm.out" >/dev/null \
+    || fail "a killed watcher's recovery did not surface: $(cat "$dir/unclean-arm.out")"
+  pass "watch-arm: an empty recovery after a clean close is absorbed, while queued work and a killed watcher still surface"
+}
+
 test_append_wakes_live_announced_watcher() {
   local dir home state fakebin first_out idle_out
   dir=$(make_case append-after-empty-recovery)
@@ -1490,6 +1580,7 @@ test_recovery_consumption_serializes_queue_publication
 test_restart_preserves_recovery_across_reused_pid_lock
 test_markerless_legacy_queue_is_recovered_on_arm
 test_idle_lavish_source_stays_quiet_until_result
+test_clean_close_empty_recovery_is_absorbed
 test_append_wakes_live_announced_watcher
 test_handling_window_close_keeps_the_acknowledgement_valid
 test_moved_generation_acknowledgement_is_self_healing

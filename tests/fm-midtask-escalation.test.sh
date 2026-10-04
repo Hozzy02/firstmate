@@ -226,6 +226,65 @@ test_old_failed_state_suggests_up() {
   pass "fm-midtask-escalation: a long-idle failed state suggests up"
 }
 
+# stub_crew_state_by_read <bindir> <cheap-line> <full-line>: a fake
+# fm-crew-state.sh that answers the forge-skipping read and the full read
+# differently, as the real one does for a green PR held for merge.
+stub_crew_state_by_read() {
+  local bindir=$1 cheap=$2 full=$3
+  mkdir -p "$bindir"
+  cat > "$bindir/crew-state-stub.sh" <<SH
+#!/usr/bin/env bash
+if [ "\${FM_CREW_STATE_NO_FORGE:-0}" = 1 ]; then
+  printf '%s\n' $(printf '%q' "$cheap")
+else
+  printf '%s\n' $(printf '%q' "$full")
+fi
+SH
+  chmod +x "$bindir/crew-state-stub.sh"
+  printf '%s/crew-state-stub.sh' "$bindir"
+}
+
+test_live_done_state_withholds_a_due_suggestion() {
+  local home crew out
+  home=$(make_home live-done)
+  write_meta "$home" demo "branch=fm/no-run"
+  write_status "$home" demo "done [at=$(($(now) - 7200))]: PR checks green"
+  crew=$(stub_crew_state_by_read "$TMP_ROOT/bin-live-done" \
+    "state: failed · source: run-step · ci monitor ended" \
+    "state: done · source: run-step · checks green, held for merge")
+
+  out=$(FM_HOME="$home" FM_MIDTASK_CREW_STATE_BIN="$crew" PATH="$(no_nm_path)" "$TOOL" check demo)
+  assert_equals '' "$out" "a task whose live state is done gets no suggestion"
+  [ -s "$home/state/.midtask-escalation-demo" ] \
+    || fail "the withheld evidence was not recorded, so every poll would repeat the full read"
+  out=$(FM_HOME="$home" FM_MIDTASK_CREW_STATE_BIN="$crew" PATH="$(no_nm_path)" "$TOOL" check demo)
+  assert_equals '' "$out" "the same evidence stays silent on the next poll"
+  pass "fm-midtask-escalation: a due suggestion is withheld while the live state is done"
+}
+
+test_live_failed_state_still_suggests_up() {
+  local home crew out
+  home=$(make_home live-failed)
+  write_meta "$home" demo "branch=fm/no-run"
+  write_status "$home" demo "failed [at=$(($(now) - 7200))]: tests keep breaking"
+  crew=$(stub_crew_state_by_read "$TMP_ROOT/bin-live-failed" \
+    "state: failed · source: run-step · review failed" \
+    "state: failed · source: run-step · review failed")
+
+  out=$(FM_HOME="$home" FM_MIDTASK_CREW_STATE_BIN="$crew" PATH="$(no_nm_path)" "$TOOL" check demo)
+  assert_contains "$out" "suggests moving up a model class" "a task whose live state is still failed is suggested"
+
+  # An unreadable full read is not a done verdict either.
+  home=$(make_home live-unreadable)
+  write_meta "$home" demo "branch=fm/no-run"
+  write_status "$home" demo "failed [at=$(($(now) - 7200))]: tests keep breaking"
+  crew=$(stub_crew_state_by_read "$TMP_ROOT/bin-live-unreadable" \
+    "state: failed · source: run-step · review failed" "")
+  out=$(FM_HOME="$home" FM_MIDTASK_CREW_STATE_BIN="$crew" PATH="$(no_nm_path)" "$TOOL" check demo)
+  assert_contains "$out" "suggests moving up a model class" "an unreadable live state does not withhold the suggestion"
+  pass "fm-midtask-escalation: a genuinely stuck task is still suggested after the live-state consult"
+}
+
 test_parked_and_unknown_do_not_count_as_stall() {
   local home crew out state
   for state in parked unknown; do
@@ -428,6 +487,8 @@ test_a_later_blocked_episode_with_the_same_count_re_suggests
 test_resolved_clears_the_blocked_streak
 test_declared_pause_does_not_count_as_stall
 test_old_failed_state_suggests_up
+test_live_done_state_withholds_a_due_suggestion
+test_live_failed_state_still_suggests_up
 test_parked_and_unknown_do_not_count_as_stall
 test_unfired_evidence_drift_does_not_re_suggest
 test_nm_round_threshold_suggests_up
