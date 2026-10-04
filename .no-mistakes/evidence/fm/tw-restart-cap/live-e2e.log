@@ -1,0 +1,6 @@
+ok - claude 2.1.289 (Claude Code): a turn end records the session's context size (53250 tokens) under its session id
+ok - claude 2.1.289 (Claude Code): the recorded size grows with the conversation (53250 then 53307 tokens)
+ok - claude 2.1.289 (Claude Code): an over-cap primary gets the persist-and-restart wake
+ok - claude 2.1.289 (Claude Code): the detached worker outlived the turn, submitted /clear at an idle empty prompt, and saw the session-open hook reset the record
+ok - claude 2.1.289 (Claude Code): the resume prompt ran a turn in a new session (44e8eb8b-862f-4a54-8eb0-0a822b6213e4, 59550 tokens; the reset one ended at 121526)
+ok - Claude 2.1.289 (Claude Code) live E2E recorded context size at turn end and reset an over-cap primary through /clear into a new supervised session
