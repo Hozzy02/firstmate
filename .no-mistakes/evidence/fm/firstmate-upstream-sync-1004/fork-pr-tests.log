@@ -1,0 +1,44 @@
+== fm-context-cap
+rc=0
+ok - a second mate's own home leaves its restart to its parent
+ok - a remote second mate and an unproven home are skipped
+# all fm-context-cap tests passed
+== fm-remote-delta-read
+rc=0
+ok - an unterminated tail is withheld until the newline completes it
+ok - the reader refuses traversal, symlinks, and oversized tail lines
+delta-read contract tests complete
+== fm-wake-drain-unread-status
+rc=0
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation 9158.1791228674.gW1TMV
+ok - an empty-queue backstop presentation still preserves the status for its later signal annotation
+ok - routine working and branch-covered done lines print nothing on an empty-queue drain
+== fm-supervision-events
+rc=0
+ok - event_wait_or_sleep: a home with no push-capable window is inert (sleeps POLL, never touches the event path)
+ok - event_wait_or_sleep: consecutive event-path failures disable the fast-path and revert to pure polling (fail-closed)
+# fm-supervision-events.test.sh: all assertions passed
+== fm-watch-triage
+rc=1
+46495 12909 S    bash /Users/randalwade/.no-mistakes/worktrees/3a2378ca6c3e/01M46RGZPXS2TDNATJ6J3M0988/bin/fm-watch.sh
+wait_for_exit: owned pid 46495 survived TERM; sending KILL
+not ok - TERM did not stop a watcher blocked inside a poll
+== fm-wake-queue
+rc=0
+ok - watch liveness: an outcome that could not be queued surfaces as an error, not a wake
+ok - watch liveness: a mate mid-episode under the shared liveness lock is skipped entirely
+ok - watch liveness: an unreachable remote secondmate is probed, preserved, and never failed over
+== fm-watch-recovery-loop
+rc=0
+ok - a resurfacing handling successor stays alive and supervises instead of going blind
+ok - unacknowledged recovery is announced at most once per generation and the successor stays alive
+== fm-secondmate-restart
+rc=0
+rm: /private/var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T/fm-secondmate-restart.4CdXrY/already-current-25581/home: Directory not empty
+rm: /private/var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T/fm-secondmate-restart.4CdXrY/already-current-25581: Directory not empty
+rm: /private/var/folders/t1/8htjz3j91cqcfslff4w76zqc0000gn/T/fm-secondmate-restart.4CdXrY: Directory not empty
+== fm-backend-herdr
+rc=0
+ok - fm_backend_herdr_wait_transition: a reader/subscribe failure falls back to polling (rc 2)
+ok - fm_backend_herdr_wait_transition: Bash 3.2-safe bad-ack path closes fd 9 and removes its FIFO
+ok - fm_backend_herdr_wait_transition: stock macOS Bash clean timeout closes fd 9 and returns 1
