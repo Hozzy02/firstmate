@@ -840,7 +840,9 @@ test_secondmate_status_routine_absorbed_routed_surfaced_classifier() {
       'done [at=1]: shipped' 'failed [at=1]: broke' 'note: routed reply for the parent' \
       'resolved corr=0123456789abcdef [key=k4]: answered' \
       'working [corr=0123456789abcdef]: mirrored remote line' \
-      'shrug: an unknown verb'; do
+      'shrug: an unknown verb' \
+      'done: could not finish, blocked on missing credentials' 'done: tests failed, need your call' \
+      'done: finished the cleanup'; do
     printf 'working: routine\n%s\nworking: routine again\n' "$line" > "$state/sm.status"
     ! signal_crew_provably_working "$state/sm.status" \
       || fail "a busy secondmate's '$line' was absorbed as routine progress"
@@ -1655,17 +1657,33 @@ test_working_note_not_working_surfaced() {
   status_file="$state/task.status"
   printf 'working: compiling step 2\n' > "$status_file"
   # A non-no-mistakes crew (no run) whose pane went idle: fm-crew-state falls back
-  # to the stale working: status-log line. That is NOT positive evidence, so the
-  # wake must surface - these users must never be left hanging.
+  # to the stale working: status-log line, which is NOT positive evidence. The
+  # progress note itself is a routine line and costs no wake...
   export FM_FAKE_CREW_STATE='state: working · source: status-log · working: compiling step 2'
   watch_bg "$state" "$fakebin" "$out"
   pid=$!
-  wait_for_exit "$pid" 100 || fail "watcher did not surface a working: note whose crew has no running pipeline and an idle pane"
-  grep -F "signal: $status_file" "$out" >/dev/null || fail "watcher did not print the surfaced working: signal"
-  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the surfaced working: note failed"
-  grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$status_file" >/dev/null || fail "surfaced working: note was not queued"
-  [ -s "$state/.seen-task_status" ] || fail "surfaced working: note did not advance its .seen-* suppressor"
-  pass "a no-verb working: note whose crew is idle with no running pipeline is surfaced"
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; fail "watcher surfaced a routine working: note: $(cat "$out")"
+  fi
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "a routine working: note enqueued a durable wake"; }
+  [ -s "$state/.seen-task_status" ] || { reap "$pid"; fail "absorbed working: note did not advance its .seen-* suppressor"; }
+  # ...but the same unproven crew stopping its turn must still surface - these
+  # users must never be left hanging.
+  : > "$state/task.turn-ended"
+  wait_for_exit "$pid" 100 || fail "watcher did not surface a stopped turn whose crew has no running pipeline and an idle pane"
+  grep -F "signal: $state/task.turn-ended" "$out" >/dev/null || fail "watcher did not print the surfaced turn-end signal"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the surfaced turn-end failed"
+  grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$state/task.turn-ended" >/dev/null || fail "surfaced turn-end was not queued"
+  # An actionable line from the same unproven crew wakes on its own.
+  dir=$(make_case working-note-then-blocked); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; status_file="$state/task.status"
+  printf 'working: compiling step 2\nblocked [at=1]: need access\n' > "$status_file"
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  wait_for_exit "$pid" 100 || fail "watcher absorbed a blocker that followed a routine working: note"
+  grep -F "signal: $status_file" "$out" >/dev/null || fail "watcher did not print the surfaced blocker signal"
+  unset FM_FAKE_CREW_STATE
+  pass "a routine working: note costs no wake while the same crew's stopped turn and blocker still surface"
 }
 
 test_secondmate_status_note_surfaced_despite_busy_agent() {
@@ -1713,6 +1731,141 @@ test_secondmate_routine_progress_absorbed_then_note_surfaced() {
   grep -F "$state/mate.status" "$state/.wake-queue" >/dev/null \
     || fail "surfaced secondmate note was not durably queued"
   pass "a busy secondmate's routine working: is absorbed while its later note: still surfaces"
+}
+
+# --- routine status lines: durable and visible, never a wake of their own ----
+
+test_routine_status_line_classifier() {
+  local dir state line
+  dir=$(make_case routine-line-classify); state="$dir/state"
+  printf 'kind=secondmate\n' > "$state/sm.meta"
+  printf 'kind=ship\n' > "$state/crew.meta"
+  # A mate's unkeyed acknowledgement, unkeyed progress, and a resolved line are
+  # routine at the line level.
+  for line in 'done [at=1]: re-read AGENTS.md, idle' 'done: idle, queue empty' \
+      'working: step 2 of 5' 'resolved [key=phase-a] [at=1]: no longer active'; do
+    status_line_is_routine "$line" secondmate || fail "routine secondmate line was not routine: $line"
+  done
+  # Anything a supervisor acts on is never routine, for any kind.
+  for line in 'needs-decision [key=k]: pick one' 'blocked: need access' 'failed [at=1]: broke' \
+      'note: routed reply' 'done corr=0123456789abcdef: answered' 'done [key=ab12cd34]: child shipped' \
+      'done: PR https://example.test/o/r/pull/7 checks green' 'done: PR ready' 'done: merged the fix' \
+      'done: report at data/x/report.md' 'working [key=phase-a]: material phase' \
+      'paused: waiting on CI' 'resolved [key=pending-reply-missed-1]: recovered' \
+      'captain-held [key=k]: held' 'shrug: an unknown verb'; do
+    ! status_line_is_routine "$line" secondmate || fail "actionable line was classified routine: $line"
+  done
+  # A ship or scout done: is that task's handoff, never routine.
+  ! status_line_is_routine 'done [at=1]: implemented, ready for validation' ship \
+    || fail "a ship done: handoff was classified routine"
+  ! status_line_is_routine 'done: report written' scout || fail "a scout done: was classified routine"
+  status_line_is_routine 'working: setup done' ship || fail "a ship progress note was not routine"
+
+  # Span level: the routine acknowledgement is not an event of its span, while
+  # an actionable line in the same span still is, and a ship done: always is.
+  printf 'done [at=1]: re-read AGENTS.md, idle\n' > "$state/sm.status"
+  ! status_span_has_actionable "$state/sm.status" 0 \
+    || fail "a secondmate's routine acknowledgement was an actionable span event"
+  status_span_routine "$state/sm.status" 0 || fail "a routine-only span was not routine"
+  signal_status_batch_routine "$state/sm.status" || fail "a routine-only status batch was not routine"
+  ! signal_status_batch_routine "$state/sm.status" "$state/sm.turn-ended" \
+    || fail "a batch carrying a stopped turn was classified routine"
+  printf 'blocked [key=k3]: need access\n' >> "$state/sm.status"
+  status_span_has_actionable "$state/sm.status" 0 \
+    || fail "a blocker after a routine acknowledgement was not actionable"
+  ! status_span_routine "$state/sm.status" 0 || fail "a span carrying a blocker was routine"
+  printf 'done [at=1]: re-read AGENTS.md, idle\n' > "$state/crew.status"
+  status_span_has_actionable "$state/crew.status" 0 \
+    || fail "a ship done: stopped being an actionable span event"
+  ! signal_status_batch_routine "$state/crew.status" || fail "a ship done: batch was classified routine"
+
+  # resolved: routine only when it closes nothing still open before it.
+  printf 'working [key=phase-a]: started\n' > "$state/sm.status"
+  line=$(size_of "$state/sm.status")
+  printf 'resolved [key=phase-a]: no longer active\n' >> "$state/sm.status"
+  ! status_span_routine "$state/sm.status" 0 || fail "a keyed working: phase event was routine"
+  status_span_routine "$state/sm.status" "$line" \
+    || fail "a resolved line with nothing pending was not routine"
+  printf 'needs-decision [key=api]: pick one\n' > "$state/sm.status"
+  line=$(size_of "$state/sm.status")
+  printf 'resolved [key=api]: took A\n' >> "$state/sm.status"
+  ! status_span_routine "$state/sm.status" "$line" \
+    || fail "a resolved line closing an open decision was routine"
+  printf 'needs-decision [key=api]: pick one\nresolved [key=other]: unrelated phase ended\n' > "$state/sm.status"
+  status_span_routine "$state/sm.status" "$line" \
+    || fail "a resolved line for an unrelated key was not routine while another decision stays open"
+  pass "routine status lines are unkeyed progress, nothing-pending resolved, and a secondmate's unkeyed acknowledgement; every actionable line keeps its class"
+}
+
+test_secondmate_routine_ack_no_wake_actionable_wakes() {
+  local dir state fakebin out drain_out pid
+  dir=$(make_case secondmate-routine-ack); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  mkdir -p "$dir/config"; : > "$dir/config/supervision-host-off"
+  printf 'kind=secondmate\n' > "$state/mate.meta"
+  # An IDLE mate (no execution proof at all) acknowledges an instruction re-read,
+  # notes progress, and closes a phase nobody was waiting on. With a fast
+  # heartbeat running, neither the signal path nor the backstop may wake.
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · idle'
+  printf 'done [at=1]: re-read AGENTS.md, idle\nworking: reconciling backlog\nresolved [key=phase-a]: no longer active\n' \
+    > "$state/mate.status"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_CONFIG_OVERRIDE="$dir/config" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 \
+    FM_HEARTBEAT=1 FM_SECONDMATE_LIVENESS_SECS=99999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid" || ! wait_poll_cycle "$state" "$pid" || ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; fail "an idle secondmate's routine status lines woke the supervisor: $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || { reap "$pid"; fail "routine secondmate lines printed a wake reason: $(cat "$out")"; }
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "routine secondmate lines enqueued a durable wake"; }
+  [ -s "$state/.seen-mate_status" ] || { reap "$pid"; fail "absorbed routine lines did not advance the .seen-* suppressor"; }
+  [ "$(cat "$state/.heartbeat-streak" 2>/dev/null || echo 0)" -ge 1 ] \
+    || { reap "$pid"; fail "no heartbeat scan ran over the routine lines"; }
+  # The same idle mate's delivered outcome wakes at once.
+  printf 'done [key=ab12cd34] [at=2]: PR https://example.test/o/r/pull/7 checks green\n' >> "$state/mate.status"
+  wait_for_exit "$pid" 100 || fail "watcher absorbed a secondmate's delivered outcome after its routine lines"
+  grep -F "signal: $state/mate.status" "$out" >/dev/null \
+    || fail "watcher did not print the surfaced secondmate outcome"
+  grep -F "$state/mate.status" "$state/.wake-queue" >/dev/null \
+    || fail "surfaced secondmate outcome was not durably queued"
+  # The deferred acknowledgement stayed durable and is presented by the drain.
+  FM_STATE_OVERRIDE="$state" FM_CONFIG_OVERRIDE="$dir/config" "$DRAIN" > "$drain_out" 2>/dev/null \
+    || fail "drain after the surfaced secondmate outcome failed"
+  grep -F 'UNREAD STATUS' "$drain_out" >/dev/null \
+    || fail "drain printed no UNREAD STATUS section for the deferred acknowledgement: $(cat "$drain_out")"
+  grep -F 'mate done [at=1]: re-read AGENTS.md, idle' "$drain_out" >/dev/null \
+    || fail "the deferred routine acknowledgement was not presented by the drain: $(cat "$drain_out")"
+  unset FM_FAKE_CREW_STATE
+  pass "an idle secondmate's routine lines cost no wake and reach the drain digest, while its delivered outcome wakes"
+}
+
+test_secondmate_actionable_lines_wake_when_idle() {
+  local dir state fakebin out pid line n=0
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · idle'
+  for line in 'needs-decision [key=k2]: pick one' 'blocked [key=k3]: need access' 'failed [at=1]: broke' \
+      'done corr=0123456789abcdef [at=1]: answered the marked request' \
+      'done [at=1]: report at data/audit/report.md'; do
+    n=$((n + 1))
+    dir=$(make_case "secondmate-actionable-$n"); state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
+    printf 'kind=secondmate\n' > "$state/mate.meta"
+    printf 'done [at=1]: re-read AGENTS.md, idle\n%s\nworking: carrying on\n' "$line" > "$state/mate.status"
+    watch_bg "$state" "$fakebin" "$out"
+    pid=$!
+    wait_for_exit "$pid" 100 || fail "an actionable secondmate line did not wake between routine lines: $line"
+    grep -F "signal: $state/mate.status" "$out" >/dev/null \
+      || fail "watcher did not print the surfaced line: $line"
+  done
+  # A decision the mate closes itself is an answer the supervisor must read.
+  dir=$(make_case secondmate-self-close); state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
+  printf 'kind=secondmate\n' > "$state/mate.meta"
+  printf 'needs-decision [key=api]: pick one\n' > "$state/mate.status"
+  printf '%s' "$(seen_sig "$state/mate.status")" > "$state/.seen-mate_status"
+  printf 'resolved [key=api]: took A\n' >> "$state/mate.status"
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  wait_for_exit "$pid" 100 || fail "a resolved line closing an open decision did not wake"
+  unset FM_FAKE_CREW_STATE
+  pass "decisions, blockers, failures, marked replies, document pointers, and a self-closed decision wake from an idle secondmate"
 }
 
 test_secondmate_buried_block_wakes_despite_busy_agent() {
@@ -6711,6 +6864,9 @@ test_turn_ended_surfaced_batch_opens_no_partial_deadline
 test_working_note_not_working_surfaced
 test_secondmate_status_note_surfaced_despite_busy_agent
 test_secondmate_routine_progress_absorbed_then_note_surfaced
+test_routine_status_line_classifier
+test_secondmate_routine_ack_no_wake_actionable_wakes
+test_secondmate_actionable_lines_wake_when_idle
 test_secondmate_buried_block_wakes_despite_busy_agent
 test_self_announced_close_does_not_rewake_but_next_note_does
 test_self_announced_close_after_open_decisions_fold_does_not_rewake

@@ -317,8 +317,10 @@ marker_kind() {  # <home>
 engine_calls() { find "$1" -maxdepth 1 -name 'engine-call.*' 2>/dev/null | wc -l | tr -d ' '; }
 handled_count() { local n; n=$(grep -c '	handled	' "$1/state/.supervision-host.log" 2>/dev/null); printf '%s\n' "${n:-0}"; }
 handled_at_least() { [ "$(handled_count "$1")" -ge "$2" ]; }
-append_status() {  # <home> <text>
-  printf '%s [at=%s]: %s\n' "${3:-working}" "$(date +%s)" "$2" >> "$1/state/demo.status"
+# The default line carries a phase key: an unkeyed working line is a routine
+# progress note that never wakes the supervisor, and these fixtures need a wake.
+append_status() {  # <home> <text> [<verb>]
+  printf '%s [key=phase] [at=%s]: %s\n' "${3:-working}" "$(date +%s)" "$2" >> "$1/state/demo.status"
 }
 
 # --- report surface -----------------------------------------------------------
