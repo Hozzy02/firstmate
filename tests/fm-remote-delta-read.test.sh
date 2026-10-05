@@ -59,20 +59,6 @@ mkdir -p "$DELTA_SHIM"
 for TOOL in perl shasum sha256sum od tail head wc tr date stat dirname basename; do
   REAL=$(PATH=/usr/bin:/bin command -v "$TOOL" 2>/dev/null || true)
   [ -n "$REAL" ] || continue
-  if [ "$TOOL" = perl ]; then
-    cat > "$DELTA_SHIM/$TOOL" <<SH
-#!/bin/sh
-printf '%s\n' perl >> "\$FM_TEST_EXEC_LOG"
-"$REAL" "\$@"
-rc=\$?
-if [ "\$rc" -eq 0 ] && [ -n "\${FM_TEST_SNAPSHOT_DONE:-}" ]; then
-  : > "\$FM_TEST_SNAPSHOT_DONE"
-fi
-exit "\$rc"
-SH
-    chmod +x "$DELTA_SHIM/$TOOL"
-    continue
-  fi
   cat > "$DELTA_SHIM/$TOOL" <<SH
 #!/bin/sh
 printf '%s\n' $TOOL >> "\$FM_TEST_EXEC_LOG"
@@ -80,27 +66,6 @@ exec $REAL "\$@"
 SH
   chmod +x "$DELTA_SHIM/$TOOL"
 done
-# Model a same-second stat key without depending on how soon a loaded runner
-# schedules the rewrite. The real size, inode, and device still come from the
-# file; only the fractional mtime and ctime vary with the fixture contents.
-REAL_STAT=$(PATH=/usr/bin:/bin command -v stat)
-cat > "$DELTA_SHIM/stat" <<SH
-#!/bin/sh
-printf '%s\n' stat >> "\$FM_TEST_EXEC_LOG"
-if [ -n "\${FM_TEST_SAME_SECOND_LOG:-}" ] && [ "\${3:-}" = "\$FM_TEST_SAME_SECOND_LOG" ]; then
-  /usr/bin/perl -e '
-    my \$path = shift;
-    my @s = stat(\$path) or exit 1;
-    open my \$fh, "<", \$path or exit 1;
-    read(\$fh, my \$prefix, 5) == 5 or exit 1;
-    my \$fraction = \$prefix eq "OMEGA" ? "200000000" : "100000000";
-    print "\$s[7]:2000000000.\$fraction:2000000000.\$fraction:\$s[1]:\$s[0]\\n";
-  ' "\$FM_TEST_SAME_SECOND_LOG"
-  exit \$?
-fi
-exec "$REAL_STAT" "\$@"
-SH
-chmod +x "$DELTA_SHIM/stat"
 : > "$EXEC_LOG"
 : > "$DELTA_HOME/$DELTA_LOG_REL"
 FM_TEST_EXEC_LOG="$EXEC_LOG" PATH="$DELTA_SHIM:/usr/bin:/bin" \
@@ -178,40 +143,55 @@ assert_contains "$OUT" 'reason=prefix-changed' 'the same-size rewrite was not na
 assert_contains "$OUT" 'to_offset=11' 'the break did not report the current size'
 pass 'a same-size in-place rewrite breaks continuity as prefix-changed'
 
-# A same-size rewrite of the same inode has equal whole-second timestamps in
-# the modeled stat response. Wait for the first snapshot to finish before
-# rewriting, so the next poll must notice only the changed subsecond fields.
+# Model a same-second same-size rewrite at the stat executable boundary:
+# size, inode, device, and whole-second timestamps stay fixed; only the
+# fractions change. Rewrite the real log after the initial snapshot's prefix
+# has been hashed, so scheduler load cannot move the test across a second.
+SUBSECOND_SHIM="$TMP_ROOT/subsecond-shim"
+mkdir -p "$SUBSECOND_SHIM"
+cat > "$SUBSECOND_SHIM/stat" <<'SH'
+#!/bin/sh
+fraction=111111111
+[ ! -e "$FM_TEST_REWRITE_DONE" ] || fraction=222222222
+printf '11:100.%s:100.%s:123:456\n' "$fraction" "$fraction"
+SH
+REAL_SHASUM=$(PATH=/usr/bin:/bin command -v shasum)
+cat > "$SUBSECOND_SHIM/shasum" <<SH
+#!/bin/sh
+"$REAL_SHASUM" "\$@" || exit \$?
+case "\$3" in
+*/prefix)
+  if [ ! -e "\$FM_TEST_REWRITE_DONE" ]; then
+    if [ "\${FM_TEST_REMOVE_LOG:-0}" = 1 ]; then
+      rm -- "\$FM_TEST_REWRITE_LOG"
+    else
+      printf 'OMEGA\\nbeta\\n' > "\$FM_TEST_REWRITE_LOG"
+    fi
+    : > "\$FM_TEST_REWRITE_DONE"
+  fi
+  ;;
+esac
+SH
+chmod +x "$SUBSECOND_SHIM/stat" "$SUBSECOND_SHIM/shasum"
 printf 'alpha\nbeta\n' > "$DELTA_HOME/$DELTA_LOG_REL"
-SNAPSHOT_DONE="$TMP_ROOT/same-second-snapshot-done"
-: > "$EXEC_LOG"
-FM_TEST_EXEC_LOG="$EXEC_LOG" FM_TEST_SNAPSHOT_DONE="$SNAPSHOT_DONE" \
-  FM_TEST_SAME_SECOND_LOG="$DELTA_HOME/$DELTA_LOG_REL" \
-  PATH="$DELTA_SHIM:/usr/bin:/bin" run_reader 11 "$PREFIX_SHA" 60 \
-  > "$TMP_ROOT/same-second.out" &
-READER_PID=$!
-for _ in $(seq 1 6000); do
-  [ -e "$SNAPSHOT_DONE" ] && break
-  kill -0 "$READER_PID" 2>/dev/null || break
-  sleep 0.01
-done
-if [ ! -e "$SNAPSHOT_DONE" ]; then
-  kill -TERM "$READER_PID" 2>/dev/null || true
-  wait "$READER_PID" 2>/dev/null || true
-  fail 'the first same-second snapshot did not finish'
-fi
-printf 'OMEGA\nbeta\n' > "$DELTA_HOME/$DELTA_LOG_REL"
-wait "$READER_PID" || fail 'the same-second rewrite read did not exit 0'
+FM_TEST_REWRITE_LOG="$DELTA_HOME/$DELTA_LOG_REL" \
+  FM_TEST_REWRITE_DONE="$TMP_ROOT/rewrite-done" \
+  PATH="$SUBSECOND_SHIM:/usr/bin:/bin" \
+  run_reader 11 "$PREFIX_SHA" 10 > "$TMP_ROOT/same-second.out" \
+  || fail 'the same-second rewrite read did not exit 0'
+[ -e "$TMP_ROOT/rewrite-done" ] || fail 'the initial prefix hash did not trigger the rewrite'
 OUT=$(<"$TMP_ROOT/same-second.out")
+assert_contains "$OUT" 'status=continuity-broken' 'the subsecond change did not break continuity'
 assert_contains "$OUT" 'reason=prefix-changed' 'a same-second same-size rewrite was not detected'
 pass 'a same-second same-size rewrite of the same inode breaks continuity'
 
 # A log that disappears mid-wait breaks as missing only for a nonzero cursor.
 printf 'alpha\nbeta\n' > "$DELTA_HOME/$DELTA_LOG_REL"
-run_reader 11 "$PREFIX_SHA" 4 > "$TMP_ROOT/missing.out" &
-READER_PID=$!
-sleep 0.3
-rm -f -- "$DELTA_HOME/$DELTA_LOG_REL"
-wait "$READER_PID" || fail 'the missing-file read did not exit 0'
+FM_TEST_REWRITE_LOG="$DELTA_HOME/$DELTA_LOG_REL" \
+  FM_TEST_REWRITE_DONE="$TMP_ROOT/remove-done" FM_TEST_REMOVE_LOG=1 \
+  PATH="$SUBSECOND_SHIM:/usr/bin:/bin" \
+  run_reader 11 "$PREFIX_SHA" 10 > "$TMP_ROOT/missing.out" \
+  || fail 'the missing-file read did not exit 0'
 OUT=$(<"$TMP_ROOT/missing.out")
 assert_contains "$OUT" 'status=continuity-broken' 'a removed log did not produce a break'
 assert_contains "$OUT" 'reason=missing' 'the removed log was not named missing'
