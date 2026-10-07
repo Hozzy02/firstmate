@@ -321,7 +321,8 @@ test_over_long_finding_set_is_capped_with_the_shared_marker() {
     seg="${seg}memory"
   done
   deep="$home/data"
-  while [ "${#deep}" -lt 1200 ]; do
+  # Stay under macOS PATH_MAX while keeping the uncapped finding set long.
+  while [ "${#deep}" -lt 850 ]; do
     deep="$deep/$seg"
   done
   mkdir -p "$deep"
