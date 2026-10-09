@@ -602,7 +602,10 @@ test_lock_stale_steal_single_winner_under_concurrency() {
     pids="$pids $!"
     i=$((i + 1))
   done
-  IFS= read -r winner < "$gate"
+  # O_RDWR open cannot block or be interrupted by a contender's SIGCHLD.
+  exec 3<>"$gate"
+  IFS= read -r winner <&3
+  exec 3<&-
   [ "$winner" = "$waiter" ] || { kill "$waiter" 2>/dev/null || true; wait "$waiter" 2>/dev/null || true; }
   for pid in $pids; do
     [ "$pid" = "$winner" ] || wait "$pid" 2>/dev/null || true
