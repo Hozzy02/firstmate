@@ -1,0 +1,9 @@
+fm-pr-state rc=0 ok - argument and lookup refusals exit nonzero
+fm-worker-account rc=0 # all fm-worker-account tests passed
+fm-remote-job rc=0 ALL TESTS PASSED
+fm-secondmate-liveness rc=0 # all fm-secondmate-liveness tests passed
+fm-session-lock-ancestry rc=0 ok - session-lock: a re-anchor during a rewake turn keeps the mid-turn auto-arm proof healthy
+fm-teardown rc=0 ok - the run abort and the leaked-process reap both complete before the destructive worktree return
+fm-tool-update-check rc=0 ok - the armed check reaches the watcher as an ordinary check wake
+fm-turnend-guard rc=0 ok - fm-turnend-guard: with away mode off, the poll-derived grace never applies
+fm-polytoken-harness rc=0 ok - fm-spawn: the polytoken busy contract arms and advances through the generated writer
