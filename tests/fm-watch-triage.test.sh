@@ -7231,7 +7231,9 @@ test_exit_picker_wedge_keeps_climbing() {
     || fail "the first picker wedge dropped the dialog name: $(cat "$out")"
   grep -F 'demand-deep-inspection' "$out" >/dev/null && fail "escalation 1 demanded inspection: $(cat "$out")"
   ack_stopped_cycle "$state" || fail "could not acknowledge picker escalation 1"
-  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  # Two escalations already counted: the per-pane backoff (wedge_escalate_after)
+  # needs 4 x FM_STALE_ESCALATE_SECS of idle time before the third fires.
+  echo $(( $(date +%s) - 1000 )) > "$state/.stale-since-$key"
   printf '2\n' > "$state/.wedge-escalations-$key"
   : > "$out"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
