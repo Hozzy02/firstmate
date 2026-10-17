@@ -3238,6 +3238,68 @@ SH
   pass "herdr presentation ordering: protocol 22 appends a later child after the existing serialized child block"
 }
 
+# run_group_order_case <name> <group-key> <children-json-array>: one projected
+# create under parent w1 with the given existing children, then the new w9
+# last; the mover answers with w9 at the requested index. Prints the mover's
+# requested index, or nothing when no move was attempted.
+run_group_order_case() {
+  local name=$1 key=$2 children=$3 dir log resp fb mover mover_log out status
+  dir="$TMP_ROOT/projection-order-group-$name"; mkdir -p "$dir/responses"
+  log="$dir/log"; resp="$dir/responses"; mover="$dir/mover"; mover_log="$dir/mover.log"
+  : > "$log"; : > "$mover_log"
+  jq -cn --argjson children "$children" '
+    {result: {workspaces: ([{workspace_id: "w1", label: "firstmate"}] + $children
+      + [{workspace_id: "w9", label: "└ new · p:ZyXwVuTsRqPoNmLkJiHgFe"}])}}' > "$dir/base.json"
+  cp "$dir/base.json" "$resp/1.out"
+  printf '%s\n' '{"client":{"version":"0.9.3","protocol":22},"server":{"running":true}}' > "$resp/2.out"
+  # shellcheck disable=SC2016 # $defs is a literal JSON Schema key.
+  printf '%s\n' '{"schemas":{"request":{"oneOf":[{"properties":{"method":{"const":"workspace.move"}}}],"$defs":{"WorkspaceMoveParams":{"required":["workspace_id","insert_index"],"properties":{"insert_index":{"type":"integer"}}}}}}}' > "$resp/3.out"
+  printf '%s\n' '{"sessions":[{"name":"fmtest","running":true,"socket_path":"/tmp/fmtest.sock"}]}' > "$resp/4.out"
+  cat > "$mover" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$3" >> "$FM_FAKE_MOVER_LOG"
+jq -c --argjson at "$3" '
+  .result.workspaces as $w
+  | ([$w[] | select(.workspace_id != "w9")]) as $rest
+  | {id: "fm-workspace-move", result: {type: "workspace_list",
+      workspaces: ($rest[0:$at] + [$w[-1]] + $rest[$at:])}}' "$FM_FAKE_BASE"
+SH
+  chmod +x "$mover"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+    FM_BACKEND_HERDR_WORKSPACE_MOVER="$mover" FM_FAKE_MOVER_LOG="$mover_log" FM_FAKE_BASE="$dir/base.json" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_projection_focus_snapshot() { printf "w1\tw1:t1"; }; fm_backend_herdr_projection_focus_restore() { return 0; }; fm_backend_herdr_projection_order_best_effort fmtest w9 firstmate w1 "$1"' "$ROOT" "$key" 2>&1)
+  status=$?
+  [ "$status" -eq 0 ] || fail "group ordering $name must not fail the spawn: $out"
+  [ -z "$out" ] || fail "group ordering $name emitted a warning: $out"
+  assert_not_contains "$(cat "$log")" $'workspace\x1fclose' "group ordering $name called workspace close"
+  assert_not_contains "$(cat "$log")" $'workspace\x1frename' "group ordering $name renamed a workspace"
+  cat "$mover_log"
+}
+
+test_projection_order_group_key_places_new_task_inside_its_group() {
+  local tagged at
+  tagged='[{"workspace_id":"w2","label":"└ a · p:AbCdEfGhIjKlMnOpQrStU1","tokens":{"fm_group_order":"001.Web"}},
+           {"workspace_id":"w3","label":"└ b · p:AbCdEfGhIjKlMnOpQrStU2","tokens":{"fm_group_order":"001.Web"}},
+           {"workspace_id":"w4","label":"└ c · p:AbCdEfGhIjKlMnOpQrStU3","tokens":{"fm_group_order":"003.Other"}},
+           {"workspace_id":"wH","label":"captain-notes"}]'
+  at=$(run_group_order_case middle 002.Backend "$tagged")
+  [ "$at" = 3 ] || fail "a new group-2 task must land after the group-1 children and before group 3, got index: $at"
+  at=$(run_group_order_case same-group 001.Web "$tagged")
+  [ "$at" = 3 ] || fail "a new task must land at the end of its own group, got index: $at"
+  at=$(run_group_order_case first 000.Alpha "$tagged")
+  [ "$at" = 1 ] || fail "a new task sorting first must land at the block start, got index: $at"
+  at=$(run_group_order_case last 999.Zed "$tagged")
+  [ "$at" = 4 ] || fail "a new task sorting last must land at the block end, before a foreign workspace, got index: $at"
+  at=$(run_group_order_case untagged 001.Web '[{"workspace_id":"w2","label":"└ a · p:AbCdEfGhIjKlMnOpQrStU1","tokens":{"fm_group_order":"003.Other"}},
+           {"workspace_id":"w3","label":"└ b · p:AbCdEfGhIjKlMnOpQrStU2"},
+           {"workspace_id":"w4","label":"└ c · p:AbCdEfGhIjKlMnOpQrStU3","tokens":{"fm_group_order":"003.Other"}}]')
+  [ "$at" = 3 ] || fail "an untagged child must never end up behind a new task, got index: $at"
+  at=$(run_group_order_case no-key '' "$tagged")
+  [ "$at" = 4 ] || fail "without a group key the block-end placement must be unchanged, got index: $at"
+  pass "herdr presentation ordering: a group key places only the new workspace inside its group, untagged children stay ahead"
+}
+
 test_projection_order_secondmate_parent_block() {
   local dir log resp fb mover mover_log out status
   dir="$TMP_ROOT/projection-order-secondmate"; mkdir -p "$dir/responses"
@@ -4071,6 +4133,30 @@ test_composer_state_unknown_on_capture_failure() {
   [ "$status" -eq 0 ] || fail "composer_state should not itself fail the caller"
   [ "$out" = unknown ] || fail "an unreadable pane should read as unknown, got '$out'"
   pass "fm_backend_herdr_composer_state: reports unknown when the pane cannot be captured"
+}
+
+test_composer_state_inactive_session_fails_fast_without_server_autostart() {
+  local dir log resp fb out status
+  dir="$TMP_ROOT/composer-inactive-session"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  # status --json reports stopped server
+  printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":false}}\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state nonexistent:w1:p2' "$ROOT" )
+  status=$?
+  [ "$status" -eq 0 ] || fail "composer_state should exit 0 on inactive session"
+  [ "$out" = unknown ] || fail "composer_state on inactive session should read unknown, got '$out'"
+  assert_not_contains "$(cat "$log")" $'\x1f''server' "composer probe on inactive session must never autostart a herdr server"
+  pass "fm_backend_herdr_composer_state: fails fast to unknown for inactive session without starting server"
+}
+
+# shellcheck disable=SC2016
+test_composer_state_piped_reader_does_not_hang() {
+  local out rc=0
+  out=$( timeout 3s bash -c '. "$0/bin/fm-backend.sh"; ( fm_backend_composer_state herdr nonexistent-session:p2 ) 2>&1 | head -20' "$ROOT" ) || rc=$?
+  [ "$rc" -eq 0 ] || fail "piped composer probe on bad target hung or failed with rc=$rc"
+  [ "$out" = unknown ] || fail "piped composer probe should print unknown, got '$out'"
+  pass "fm_backend_composer_state (herdr): piped probe on bad target does not hang EOF-sensitive readers"
 }
 
 test_composer_state_unknown_when_no_composer_row_found() {
@@ -6090,6 +6176,7 @@ test_projection_label_builder_uses_corner_and_strips_owner_prefixes
 test_projection_order_moves_only_exact_new_workspace_and_preserves_relative_order
 test_projection_order_protocol_22_appends_after_existing_child
 test_projection_order_secondmate_parent_block
+test_projection_order_group_key_places_new_task_inside_its_group
 test_projection_order_foreign_legacy_child_is_read_only
 test_projection_order_allows_intervening_parent_child_block
 test_projection_order_human_spaces_never_move_targets
@@ -6123,6 +6210,8 @@ test_composer_state_real_text_is_pending
 test_composer_state_grok_oversized_title_preserves_safe_verdicts
 test_composer_state_popup_placeholder_fill_is_pending
 test_composer_state_unknown_on_capture_failure
+test_composer_state_inactive_session_fails_fast_without_server_autostart
+test_composer_state_piped_reader_does_not_hang
 test_composer_state_unknown_when_no_composer_row_found
 test_composer_state_pi_parked_prompt_is_not_empty
 test_composer_state_pi_separator_idle_is_empty

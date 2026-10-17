@@ -225,6 +225,8 @@ If a durable row arrived after the announcement, the arm opens a fresh pending d
 A due announcement with nothing to recover is absorbed instead of waking firstmate: when the episode is exactly the generation the predecessor watcher recorded in `state/.watcher-clean-close` on its own clean close, the durable queue is empty, no decision is still open in any status log, and the legacy daemon flag is absent, the watcher retires that generation itself, logs the absorb to `state/.watch-triage.log`, and keeps polling.
 A watcher records that generation only when it exits successfully or is stopped by HUP or TERM, and the next watcher start consumes the record, so a killed watcher, a recovered or cleared stale lock, an evicted stalled holder, and a quarantined marker each still announce, as do a queued row and an open decision.
 Anything that arrived while no watcher ran is surfaced by that same cycle's own signal, check, and stale scans rather than by the announcement.
+A Codex foreground checkpoint skips the announced-episode reopen transition, so an already-announced generation stays announced while the checkpoint continues its bounded supervision.
+Its ordinary arm check still announces a never-announced generation, including one made pending by a durable queue append during the checkpoint.
 
 ### Generation reuse
 
