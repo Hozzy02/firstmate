@@ -867,6 +867,11 @@ commandcode (Command Code) is verified for crewmate and scout launches only; a s
 It runs only on the tmux and Herdr backends; a zellij, cmux, or orca launch is refused because those backends supply no Command Code pane identity, without which its idle composer placeholder never reads empty and steering stalls.
 Its busy-state wiring is a tracked mod loaded per process with `--mod`, so no user or project Command Code settings are edited; [its adapter reference](../.agents/skills/harness-adapters/references/harness/commandcode.md) owns the launch facts and [Command Code verification](verification/commandcode.md) owns the live evidence.
 
+Polytoken is verified for crewmate and scout launches only; [its adapter reference](../.agents/skills/harness-adapters/references/harness/polytoken.md) owns the operating contract and [verification record](verification/polytoken.md) owns the live evidence.
+It has no primary or secondmate supervision protocol.
+The launch generates a private per-task config directory that mirrors the operator's provider/model configuration and enforces unattended permissions without modifying global configuration.
+The first-start license dialog requires an operator decision and is never accepted automatically.
+
 ### Verification and primary supervision
 
 New harnesses get verified through a supervised trial task before joining the set.
@@ -903,6 +908,7 @@ When the harness token is absent or `default`, secondmate launch falls back thro
 
 `fm-harness.sh secondmate-model` and `fm-harness.sh secondmate-effort` expose only the optional tokens from `config/secondmate-harness`; `config/crew-harness` remains a bare adapter-name file.
 Changing this pin affects the next secondmate spawn or control-plane relaunch; the relaunch profile rules are owned by [`docs/agent-control.md`](agent-control.md#transactional-relaunch).
+For a separate account choice for one local secondmate, see [per-secondmate account pins](#per-secondmate-account-pins).
 
 ### Per-launch overrides and inherited defaults
 
@@ -1013,7 +1019,7 @@ Each relaunch installs a fresh worker extension with the home's current list, so
 ## Worker account pin (config/claude-account, config/pi-account)
 
 A home that mixes accounts for one runner, such as a work login and a personal one, can pin the account its own Claude and Pi workers launch on.
-The pin is opt-in: with neither file, every launch is unchanged, and Claude workers keep receiving firstmate's own `CLAUDE_CONFIG_DIR` when it is set.
+The pin is opt-in: without a home-wide or per-secondmate pin, every launch is unchanged, and Claude workers keep receiving firstmate's own `CLAUDE_CONFIG_DIR` when it is set.
 
 Both files are local and gitignored.
 
@@ -1037,7 +1043,8 @@ An unqualified model, an undeclared provider, or a raw Pi launch command, which 
 
 ### Launch scope and sign-in checks
 
-When a file is present, every launch of that runner from this home uses it: ships, scouts, local secondmate agents, raw Claude launch commands, and relaunches.
+When a file is present, launches of that runner from this home use it: ships, scouts, local secondmate agents, raw Claude launch commands, and relaunches.
+A local secondmate can override this default with its own [per-secondmate account pin](#per-secondmate-account-pins).
 A raw Claude launch command refuses if its leading assignments set `CLAUDE_CONFIG_DIR` or a credential that a pinned launch unsets, such as `ANTHROPIC_API_KEY`.
 The assignment would override the pin.
 The refusal names the variable; remove that assignment from the raw command, or change or remove `config/claude-account`.
@@ -1055,10 +1062,31 @@ A home that authenticates Claude through environment credentials on purpose shou
 A malformed file, a root that is not a readable directory, or a signed-out account refuses the launch and names the file to fix; Firstmate never falls back to the ambient account and never changes a global login or copies a credential.
 The spawn prints the pin as `account=` (plus `account_provider=` for Pi) and records the same fields in the task record, so the session-start digest shows which account each worker launched on.
 
-Pins are not inherited into secondmate homes: a local secondmate agent launches on the launching home's pin, while the secondmate's own workers read the secondmate home's files.
+Pins are not inherited into secondmate homes: the secondmate's own workers read that home's `config/claude-account` and `config/pi-account` files independently.
 A remote secondmate is launched on its host from its own home's configuration, so create the file in that remote home.
 
 [`bin/fm-worker-account-lib.sh`](../bin/fm-worker-account-lib.sh) owns parsing, the sign-in check, and the full list of credentials a Claude launch unsets; [runtime backend verification](verification/runtime-backends.md#worker-account-pin-sign-in-check) records the check against the real runners.
+
+### Per-secondmate account pins
+
+To choose an account for one local secondmate's own agent, create `config/secondmate-accounts/<id>/claude-account` or `config/secondmate-accounts/<id>/pi-account` in the primary home.
+Use the secondmate's registered identifier for `<id>`.
+These private files use the same [file format and provider selection](#file-format-and-provider-selection), sign-in checks, and refusal rules as the home-wide worker pins.
+
+The matching per-secondmate file overrides the primary home's matching worker pin for that secondmate alone.
+An absent per-secondmate file preserves the existing home-wide pin or unpinned behavior exactly.
+Other secondmates and ordinary workers remain unchanged.
+A pin for another runner does not apply, and `pi` and `pi-signed` share `pi-account`.
+An empty, malformed, unreadable, or unusable per-secondmate pin refuses with its path and reason rather than falling back to the primary's account.
+
+For example, `config/secondmate-accounts/work/claude-account` containing `/home/me/.claude-work` selects that existing Claude login for the local secondmate named `work`.
+Removing that file restores the primary home's account selection on the next launch.
+Every spawn, control-plane relaunch, and automatic recovery reads the durable setting again, never a previous task record or ambient account choice.
+After changing a live mate's pin, use `bin/fm-control.sh <id> relaunch` to apply it.
+The relaunch checks the selected pin before stopping the current agent.
+
+Per-secondmate pins stay in the primary home and are not inherited or copied into the secondmate's home.
+A matching primary-side per-secondmate pin for a remote route refuses before remote launch, because its account must be configured on that host instead.
 
 ## Lavish server address (config/lavish-axi-host)
 
@@ -1618,7 +1646,7 @@ The second condition is the reason the check exists.
 An update can install correctly and stay inert because an earlier `PATH` entry still holds an older copy, and a check that only asks whether a newer version is published reports that host as up to date.
 
 The script therefore runs every copy of a watched command found on `PATH` and asks it for its own version, rather than trusting one lookup or reading a version out of a directory name.
-It only reports; it never installs, updates, fetches, or changes `PATH`, a version manager, or any installed tool.
+It only reports; it never installs or updates tools, fetches into a watched git repository, or changes `PATH` or a version manager.
 
 This section is the single owner of the canonical schema.
 `bin/fm-tool-update-check.sh` owns probe mechanics, cadence, and the report record.
@@ -1632,6 +1660,7 @@ This section is the single owner of the canonical schema.
       "version_args": ["<optional args that make it print its version, default --version>"],
       "announce_pattern": "<optional extended regex matching the tool's own update announcement>",
       "announce_args": ["<optional args for the command that carries that announcement, default version_args>"],
+      "version_url": "<optional https URL whose body carries the newest published version>",
       "git": {
         "repo": "<optional absolute path to a local clone>",
         "remote": "<optional remote name, default origin>",
@@ -1649,6 +1678,9 @@ This section is the single owner of the canonical schema.
 - The announcement counts as `update available` only when the version it names is newer than the newest installed copy found; a version already installed is reported only as `update not in effect`, so one completed install does not report both in the same sweep. An announcement naming no readable version is reported as an available update as before.
 - A tool does not always announce a new release on the command that prints its version: `no-mistakes --version` prints only the version, while its other commands carry the announcement.
 - `announce_args` names the command to search for the announcement in that case, and it is asked only of the copy `PATH` resolves; without it the version probe's own output is searched.
+- A tool whose CLI never announces its own updates (Claude Code is one) can add `version_url` to its `command` entry: one HTTPS URL without whitespace or control characters whose response body carries the newest published version.
+- It is fetched read-only with curl inside the same probe bound; the first dotted numeric version in the body is compared with the newest installed copy found.
+- `update available` is reported only when the published version is newer than every installed copy found; a failed request, a body without a readable version, or a missing curl is reported as that tool's own check failure.
 - An `announce_pattern` that is not a usable extended regular expression stops `arm`, and during a sweep it is reported as that one tool's own check failure so one broken pattern never stops the other watched tools from being checked.
 - A `git` entry reports how many commits the local clone is behind its remote branch, and stays silent when the clone is current or ahead.
 - An omitted `branch` uses the remote's default branch, taken from the clone's own record of it and otherwise asked of the remote directly, so a `--single-branch` clone still resolves.
