@@ -11,6 +11,10 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/wake-helpers.sh"
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-classify-lib.sh"
+# These cases drive the upstream wedge cap against one fixed 500s idle timer, so
+# pin the fork's widening escalation backoff to its base interval (its ceiling
+# is the pause recheck cadence); the backoff has its own coverage.
+export FM_PAUSE_RESURFACE_SECS=240
 
 WATCH="$ROOT/bin/fm-watch.sh"
 DRAIN="$ROOT/bin/fm-wake-drain.sh"
@@ -62,20 +66,20 @@ file_mtime() {
 }
 
 wait_poll_cycle() {  # <state> <pid> [limit-ticks]
-  local state=$1 pid=$2 limit=${3:-300} beat first now i=0
-  beat="$state/.last-watcher-beat"
-  rm -f "$beat"
+  local state=$1 pid=$2 limit=${3:-300} turnover first now i=0
+  turnover="$state/.last-cycle-turnover"
+  rm -f "$turnover"
   first=""
   while [ "$i" -lt "$limit" ]; do
     kill -0 "$pid" 2>/dev/null || return 1
-    first=$(file_mtime "$beat")
+    first=$(file_mtime "$turnover")
     [ -n "$first" ] && break
     sleep 0.1
     i=$((i + 1))
   done
   while [ "$i" -lt "$limit" ]; do
     kill -0 "$pid" 2>/dev/null || return 1
-    now=$(file_mtime "$beat")
+    now=$(file_mtime "$turnover")
     if [ -n "$now" ] && [ "$now" != "$first" ]; then
       return 0
     fi
