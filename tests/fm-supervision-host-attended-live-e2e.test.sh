@@ -398,8 +398,10 @@ run_positive() {
     "needs-decision [at=$(date +%s)] [key=lab-e4]: pick a rollout window" > "$lab/handoff.out" &
   injector=$!
   e4=$(date +%s)
-  printf 'working [at=%s]: rollout prep started\n' "$e4" >> "$lab/fm/state/demo2.status"
-  evidence "positive step 5: event 4, a routine working line on task demo2, appended at $e4"
+  # Keyed as a phase event: an unkeyed working line is a routine progress note
+  # that never wakes the watcher, and event 4 must reach the host.
+  printf 'working [key=phase] [at=%s]: rollout prep started\n' "$e4" >> "$lab/fm/state/demo2.status"
+  evidence "positive step 5: event 4, a keyed working phase line on task demo2, appended at $e4"
   wait "$injector" \
     || fail "positive: the host never handed event 4 to the supervision session (the recovery marker never read handling)"$'\n'"$(diagnose "$lab")"
   handoff=$(cat "$lab/handoff.out")

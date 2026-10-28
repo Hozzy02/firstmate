@@ -120,7 +120,9 @@ printf '# first turn: %s\n' "$(grep '	handled	' "$FM/state/.supervision-host.log
 printf '# outcome: %s\n' "$(head -n 1 "$FM/state/branch-outcomes.jsonl")"
 
 session=$(sed -n 's/^session=//p' "$FM/state/.supervision-host-engine")
-printf 'working [at=%s]: started the follow-up check\n' "$(date +%s)" >> "$FM/state/demo.status"
+# Keyed as a phase event: an unkeyed working line is a routine progress note
+# that never wakes the watcher, and this second wake must reach the engine.
+printf 'working [key=phase] [at=%s]: started the follow-up check\n' "$(date +%s)" >> "$FM/state/demo.status"
 wait_until "$HOST_TIMEOUT_POLLS" settled_at_least 2 || fail "the second engine turn never settled ($CLAUDE_VERSION)"$'\n'"$(diagnose)"
 [ "$(grep -c '	handled	' "$FM/state/.supervision-host.log")" -ge 2 ] \
   || fail "the real engine did not handle the second wake ($CLAUDE_VERSION)"$'\n'"$(diagnose)"

@@ -630,12 +630,15 @@ SH
 
 
 # A handled stale event for the idle worker, in the given posture, after the
-# handled paused and resolved signals
-stale_handled_after_resolved() {  # <home> <posture>
-  awk -F '\t' -v posture="posture=$2" '
+# handled paused signal and no earlier than the resolved hand-back's stamp.
+# The resolved line itself closes no open decision, so it is a routine status
+# line (bin/fm-classify-lib.sh "Routine status lines") that never wakes the
+# host; the ordering is proven by the stale event's own timestamp instead.
+stale_handled_after_resolved() {  # <home> <posture> <resolved-at-epoch>
+  awk -F '\t' -v posture="posture=$2" -v at="$3" '
     $2 != "handled" { next }
     /signal: .*\/demo\.status$/ { signals++; next }
-    signals >= 2 && index($0, posture) && /stale: firstmate:fm-demo$/ { found = 1 }
+    signals >= 1 && $1 >= at && index($0, posture) && /stale: firstmate:fm-demo$/ { found = 1 }
     END { exit !found }
   ' "$1/state/.supervision-host.log" 2>/dev/null
 }
@@ -643,7 +646,7 @@ stale_handled_after_resolved() {  # <home> <posture>
 
 # Model the same returned driver with monitoring intact, in both postures
 assert_returned_driver_is_caught() {  # <attended|away>
-  local posture=$1 home
+  local posture=$1 home resolved_at
   home=$(make_primary_home "hook-returned-driver-$posture")
   ln -s "$ROOT/.agents" "$home/.agents"
   if [ "$posture" = away ]; then
@@ -666,9 +669,10 @@ exit 1
 SH
   chmod +x "$home/fakebin/tmux"
   printf 'window=firstmate:fm-demo\nproject=demo\nkind=ship\nharness=pi\nbackend=tmux\n' > "$home/state/demo.meta"
+  resolved_at=$(date +%s)
   append_status "$home" 'measurement driver returned; inspect receipts' resolved
   # A hang guard only; the stale event's order after the resolved hand-back is the assertion
-  wait_until 1200 stale_handled_after_resolved "$home" "$posture" \
+  wait_until 1200 stale_handled_after_resolved "$home" "$posture" "$resolved_at" \
     || fail "returned driver: the idle worker was not stale-handled in posture $posture after its resolved signal: $(cat "$home/state/.supervision-host.log")"
   [ ! -s "$home/hook.rc" ] || fail "a routine returned-driver wake reached main"
   wait_until 250 watcher_live "$home" || fail "the returned-driver control lost monitoring"
@@ -1027,7 +1031,9 @@ assert_lost_handoff_keeps_watching() {  # <boundary|pass-through>
   # Drop the continuation entirely: no drain, acknowledgement, or Stop follows.
   watcher_live "$home" || fail "$mode: lost continuation left no verified watcher"
   watcher=$(cat "$home/state/.watch.lock/pid")
-  printf 'working [at=%s]: another event\n' "$(date +%s)" >> "$home/state/other.status"
+  # Keyed as a phase event: an unkeyed working line is a routine progress note
+  # that never wakes the watcher, and this step needs a wake.
+  printf 'working [key=phase] [at=%s]: another event\n' "$(date +%s)" >> "$home/state/other.status"
   wait_until 250 bash -c '! kill -0 "$1" 2>/dev/null' _ "$watcher" \
     || fail "$mode: the successor did not observe the later event"
   wait_until 150 watcher_live "$home" || fail "$mode: a successor close left supervision down"
