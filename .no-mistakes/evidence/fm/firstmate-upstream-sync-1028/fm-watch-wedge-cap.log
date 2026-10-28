@@ -1,0 +1,11 @@
+ok - FM_WEDGE_MAX_ESCALATIONS=0 keeps the cap inert and never writes a cap marker
+ok - wedge cap fires PERMANENTLY-WEDGED at FM_WEDGE_MAX_ESCALATIONS and writes the window-scoped cap marker
+ok - subsequent polls on the same hash stay silent while the window-scoped cap marker stands
+ok - the window-scoped cap marker silences a hash-churning pane across all post-cap polls
+ok - the cap is bound by FM_CAP_HORIZON_SECS and re-fires after the horizon elapses
+ok - operator rm of the cap marker lifts the cap and the next wedge re-accumulates from 1
+ok - non-integer FM_WEDGE_MAX_ESCALATIONS falls back to 0 and the cap stays inert
+/Users/randalwade/.no-mistakes/worktrees/3c3138b26b62/01M61ZH7B0BC36FZZ3CD2ZN8H2/bin/fm-watch.sh: line 1905: [: 99999999999999999999: integer expression expected
+ok - an escalation counter the shell cannot compare is read as a fresh count of 1, never as a count the arithmetic wrapped around
+ok - the rollback-failed sentinel silences the wedge path within FM_ROLLBACK_SENTINEL_TTL_SECS and still reports a gone endpoint
+Terminated: 15
